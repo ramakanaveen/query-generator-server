@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import socketio
 
-from app.routes import query, conversation, websocket
+from app.routes import query, conversation, websocket, directives
 from app.core.config import settings
 
 app = FastAPI(
@@ -23,7 +23,7 @@ app.add_middleware(
 # Include routers
 app.include_router(query.router, prefix="/api/v1", tags=["query"])
 app.include_router(conversation.router, prefix="/api/v1", tags=["conversation"])
-
+app.include_router(directives.router, prefix="/api/v1", tags=["directives"])
 # Socket.IO setup
 sio = socketio.AsyncServer(
     async_mode="asgi",
