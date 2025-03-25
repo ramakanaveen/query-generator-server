@@ -1,0 +1,34 @@
+{
+  "description": "Spot market trading data",
+  "tables": {
+    "trades": {
+      "description": "Trade records for spot market",
+      "columns": [
+        {"name": "date", "type": "date", "description": "Trade date"},
+        {"name": "time", "type": "time", "description": "Trade time"},
+        {"name": "sym", "type": "symbol", "description": "Ticker symbol"},
+        {"name": "price", "type": "float", "description": "Trade price"},
+        {"name": "size", "type": "long", "description": "Trade size"},
+        {"name": "side", "type": "symbol", "description": "Buy or sell"}
+      ]
+    }
+  },
+  "examples": [
+    {
+      "natural_language": "Show me the top 5 AAPL trades by size today",
+      "query": "xdesc `size select top 5 from trades where date=.z.d, sym=`AAPL"
+    },
+    {
+      "natural_language": "What was the average price of MSFT trades yesterday?",
+      "query": "select avg price from trades where date=.z.d-1, sym=`MSFT"
+    },
+    {
+      "natural_language": "Count all Google trades by side",
+      "query": "select count i by side from trades where date=.z.d, sym=`GOOGL"
+    },
+    {
+      "natural_language": "Show me the largest trades today",
+      "query": "xdesc `size select from trades where date=.z.d "
+    }
+  ]
+}

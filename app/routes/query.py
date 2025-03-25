@@ -7,6 +7,7 @@ from app.services.llm_provider import LLMProvider
 from app.services.conversation_manager import ConversationManager
 from app.services.query_generator import QueryGenerator
 from app.services.database_connector import DatabaseConnector
+from app.core.logging import logger
 
 router = APIRouter()
 
@@ -38,9 +39,14 @@ async def generate_query(request: QueryRequest):
         )
     
     except ValueError as e:
+        logger.error(f"ValueError in generate_query endpoint: {str(e)}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        logger.error(f"Exception in generate_query endpoint: {str(e)}", exc_info=True)
+        logger.error(f"Exception type: {type(e)}")
         raise HTTPException(status_code=500, detail=f"Query generation failed: {str(e)}")
+
+
 
 @router.post("/execute", response_model=ExecutionResponse)
 async def execute_query(request: ExecutionRequest):

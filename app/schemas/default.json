@@ -1,0 +1,24 @@
+
+{
+    "description": "Default schema for generic queries",
+    "tables": {
+      "table": {
+        "description": "Generic table for queries without specific context",
+        "columns": [
+          {"name": "date", "type": "date", "description": "Date column"},
+          {"name": "sym", "type": "symbol", "description": "Symbol column"},
+          {"name": "val", "type": "float", "description": "Value column"}
+        ]
+      }
+    },
+    "examples": [
+      {
+        "natural_language": "Show me the data for today",
+        "query": "select from table where date=.z.d"
+      },
+      {
+        "natural_language": "What is the average value?",
+        "query": "select avg val from table"
+      }
+    ]
+  }

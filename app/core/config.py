@@ -1,9 +1,12 @@
 import os
+from pathlib import Path
 from typing import List
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
 load_dotenv()
+# Get base directory outside the Settings class
+_BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 class Settings(BaseSettings):
     # Debug mode
@@ -40,6 +43,9 @@ class Settings(BaseSettings):
         "http://localhost:8000",  # For local testing
         "https://your-production-domain.com",
     ]
+    
+    # Schema directory
+    SCHEMAS_DIRECTORY: str = os.getenv("SCHEMAS_DIRECTORY", str(_BASE_DIR / "app" / "schemas"))
     
     class Config:
         case_sensitive = True
