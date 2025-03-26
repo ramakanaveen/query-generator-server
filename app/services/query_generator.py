@@ -1,4 +1,4 @@
-# app/services/query_generator.py (MAIN SERVICE FILE)
+# app/services/query_generator.py
 from typing import Tuple, List, Dict, Any, Optional
 import uuid
 from langgraph.graph import StateGraph , END
@@ -7,7 +7,7 @@ from app.core.logging import logger
 from app.services.query_generation.nodes import (
     query_analyzer,
     schema_retriever,
-    query_generator_node,  # Renamed to avoid confusion
+    query_generator_node,
     query_validator,
     query_refiner
 )
@@ -67,11 +67,20 @@ class QueryGenerator:
         # Compile the workflow
         return workflow.compile()
     
-    def _route_after_validation(self, state: QueryGenerationState) -> str:
-        """Determine the next node after validation."""
-        if state.validation_result:
-            return "valid"
-        return "invalid"
+    def _format_conversation_history(self, history: List[Dict[str, Any]]) -> str:
+        """Format conversation history for the LLM prompt."""
+        if not history:
+            return ""
+            
+        formatted = "Previous conversation:\n"
+        for msg in history:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            if role == "user":
+                formatted += f"User: {content}\n"
+            elif role == "assistant":
+                formatted += f"Assistant generated this query: {content}\n"
+        return formatted
     
     async def generate(
         self, 
@@ -96,7 +105,7 @@ class QueryGenerator:
             # Initialize the state
             initial_state = QueryGenerationState(
                 query=query,
-                llm=self.llm,  # Pass the LLM to the state
+                llm=self.llm,
                 database_type=database_type,
                 conversation_id=conversation_id,
                 conversation_history=conversation_history or []
@@ -106,13 +115,54 @@ class QueryGenerator:
             initial_state.thinking.append(f"Received query: {query}")
             if database_type != "kdb":
                 initial_state.thinking.append(f"Database type: {database_type}")
+                
+            # Add thinking step for conversation context
+            if conversation_history:
+                try:
+                    # Ensure conversation history is properly formatted
+                    sanitized_history = []
+                    for msg in conversation_history:
+                        # Convert to dictionary if it's not already
+                        msg_dict = msg
+                        if not isinstance(msg, dict):
+                            try:
+                                # Try to convert to dict if it's a model
+                                if hasattr(msg, 'dict'):
+                                    msg_dict = msg.dict()
+                                elif hasattr(msg, 'model_dump'):
+                                    msg_dict = msg.model_dump()
+                                else:
+                                    # Skip invalid messages
+                                    logger.warning(f"Skipping invalid message in conversation history: {msg}")
+                                    continue
+                            except Exception as e:
+                                logger.warning(f"Error processing message in conversation history: {e}")
+                                continue
+                        
+                        # Ensure required fields exist
+                        if 'role' not in msg_dict or 'content' not in msg_dict:
+                            logger.warning(f"Skipping message missing required fields: {msg_dict}")
+                            continue
+                            
+                        sanitized_history.append(msg_dict)
+                    
+                    initial_state.thinking.append(f"Using conversation history with {len(sanitized_history)} messages")
+                    history_text = self._format_conversation_history(sanitized_history)
+                    initial_state.thinking.append(f"Context: {history_text}")
+                    
+                    # Update the state with sanitized history
+                    initial_state.conversation_history = sanitized_history
+                except Exception as e:
+                    logger.error(f"Error processing conversation history: {e}")
+                    initial_state.thinking.append(f"Error processing conversation history: {e}")
+                    initial_state.conversation_history = []
             
             # Run the workflow
             logger.info(f"Starting query generation for: {query}")
-            logger.info(f"Workflow structure: {self.workflow}") 
             result = await self.workflow.ainvoke(initial_state)
             
-            # Extract and return the results
+            # Fix: Extract data from the AddableValuesDict object
+            # The actual result is a dictionary, so we need to access it correctly
             generated_query = result.get("generated_query", "// No query generated")
             thinking = result.get("thinking", [])
             
