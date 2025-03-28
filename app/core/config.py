@@ -19,6 +19,14 @@ class Settings(BaseSettings):
     GOOGLE_CREDENTIALS_PATH: str = os.getenv("GOOGLE_CREDENTIALS_PATH", "./google-credentials.json")
     GOOGLE_PROJECT_ID: str = os.getenv("GOOGLE_PROJECT_ID", "")
     GOOGLE_LOCATION: str = os.getenv("GOOGLE_LOCATION", "us-central1")
+ 
+    # Google embedding settings
+    GOOGLE_EMBEDDING_MODEL_NAME: str = os.getenv("GOOGLE_EMBEDDING_MODEL_NAME", "text-embedding-005")
+    GOOGLE_EMBEDDING_ENDPOINT: str = os.getenv("GOOGLE_EMBEDDING_ENDPOINT", "")
+
+    # Schema settings
+    SCHEMA_SIMILARITY_THRESHOLD: float = float(os.getenv("SCHEMA_SIMILARITY_THRESHOLD", "0.65"))
+    SCHEMA_MAX_TABLES: int = int(os.getenv("SCHEMA_MAX_TABLES", "5"))
     
     # Gemini model settings
     GEMINI_MODEL_NAME: str = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro-002")

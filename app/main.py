@@ -4,6 +4,7 @@ import socketio
 
 from app.routes import query, conversation, websocket, directives, feedback
 from app.core.config import settings
+from app.routes import schema_management
 
 app = FastAPI(
     title="Query Generator API",
@@ -25,6 +26,7 @@ app.include_router(query.router, prefix="/api/v1", tags=["query"])
 app.include_router(conversation.router, prefix="/api/v1", tags=["conversation"])
 app.include_router(directives.router, prefix="/api/v1", tags=["directives"])
 app.include_router(feedback.router, prefix="/api/v1", tags=["feedback"])
+app.include_router(schema_management.router, prefix="/api/v1", tags=["schema"])
 
 # Socket.IO setup
 sio = socketio.AsyncServer(

@@ -11,6 +11,7 @@ from app.schemas.feedback import (
     RetryRequest,
     RetryResponse
 )
+from app.services.conversation_manager import ConversationManager
 from app.services.feedback_manager import FeedbackManager
 from app.services.llm_provider import LLMProvider
 from app.services.retry_generator import RetryGenerator

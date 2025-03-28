@@ -20,13 +20,19 @@ class QueryGenerationState(BaseModel):
     database_type: str = Field(default="kdb", description="Type of database to query")
     entities: List[str] = Field(default_factory=list, description="Extracted entities from the query")
     intent: Optional[str] = Field(default=None, description="Extracted intent from the query")
-    schema: Dict[str, Any] = Field(default_factory=dict, description="Retrieved schema information")
+    query_schema: Dict[str, Any] = Field(default_factory=dict, description="Retrieved schema information")
     generated_query: Optional[str] = Field(default=None, description="Generated database query")
     validation_result: Optional[bool] = Field(default=None, description="Whether the query is valid")
     validation_errors: List[str] = Field(default_factory=list, description="Validation errors if any")
     thinking: List[str] = Field(default_factory=list, description="Thinking process during generation")
     conversation_id: Optional[str] = Field(default=None, description="ID of the conversation for context")
     conversation_history: List[Dict[str, Any]] = Field(default_factory=list, description="Conversation history")
+    no_schema_found: bool = Field(default=False, description="Flag indicating if no relevant schema was found")
+    original_query: Optional[str] = Field(default=None, description="Original query before refinement")
+    original_errors: List[str] = Field(default_factory=list, description="Errors in the original query")
+    refinement_guidance: Optional[str] = Field(default=None, description="Guidance for query refinement")
+    refinement_count: int = Field(default=0, description="Number of refinement attempts")
+    max_refinements: int = Field(default=2, description="Maximum number of refinement attempts")
 
 class QueryGenerator:
     """
@@ -61,7 +67,14 @@ class QueryGenerator:
         # Add conditional edge with a simpler approach
         workflow.add_conditional_edges(
             "query_validator",
-            lambda state: "query_refiner" if not state.validation_result else END
+            lambda state: END if state.validation_result else (
+                END if state.refinement_count >= state.max_refinements else "query_refiner"
+            )
+)
+
+        workflow.add_conditional_edges(
+                "schema_retriever",
+            lambda state: END if state.no_schema_found else "query_generator"
         )
         
         # Compile the workflow
@@ -161,8 +174,13 @@ class QueryGenerator:
             logger.info(f"Starting query generation for: {query}")
             result = await self.workflow.ainvoke(initial_state)
             
-            # Fix: Extract data from the AddableValuesDict object
-            # The actual result is a dictionary, so we need to access it correctly
+            # Check if no schema was found
+            if hasattr(result, 'no_schema_found') and result.no_schema_found:
+                return ("// I don't know how to generate a query for this request. " + 
+                    "I couldn't find any relevant tables in the available schemas. " + 
+                    "Please try a different query or upload relevant schemas."), result.thinking
+            
+
             generated_query = result.get("generated_query", "// No query generated")
             thinking = result.get("thinking", [])
             

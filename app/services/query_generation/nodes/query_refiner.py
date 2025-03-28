@@ -6,13 +6,13 @@ from app.core.logging import logger
 
 async def refine_query(state):
     """
-    Refine the query if validation fails.
+    Create improved guidance for query generation based on validation errors.
     
     Args:
         state: The current state of the workflow
         
     Returns:
-        Updated state with refined query
+        Updated state with refinement guidance
     """
     try:
         generated_query = state.generated_query
@@ -21,9 +21,9 @@ async def refine_query(state):
         llm = state.llm
         
         # Add thinking step
-        state.thinking.append("Refining query based on validation errors...")
-        
-        # Use LLM to refine the query
+        state.thinking.append("Getting guidance based on validation errors...")
+        state.refinement_count += 1
+        # Use LLM to get refinement guidance
         prompt = ChatPromptTemplate.from_template(REFINER_PROMPT_TEMPLATE)
         chain = prompt | llm
         
@@ -36,20 +36,20 @@ async def refine_query(state):
         
         # Get the response from the LLM
         response = await chain.ainvoke(input_data)
-        refined_query = response.content.strip()
+        refinement_guidance = response.content.strip()
         
-        # Update state with refined query
-        state.generated_query = refined_query
-        state.thinking.append(f"Refined query: {refined_query}")
+        # Store the original query and errors for reference
+        state.original_query = generated_query
+        state.original_errors = validation_errors
         
-        # Reset validation result to be checked again
-        state.validation_result = None
-        state.validation_errors = []
+        # Add refinement guidance to state
+        state.refinement_guidance = refinement_guidance
+        state.thinking.append(f"Refinement guidance: {refinement_guidance}")
         
         return state
     
     except Exception as e:
         logger.error(f"Error in query refiner: {str(e)}")
-        state.thinking.append(f"Error refining query: {str(e)}")
+        state.thinking.append(f"Error getting refinement guidance: {str(e)}")
         # Still return the state to continue the workflow
         return state
