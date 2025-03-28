@@ -1,11 +1,23 @@
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 
+class MessageHistory(BaseModel):
+    role: str = Field(..., description="Message role (user or assistant)")
+    content: str = Field(..., description="Message content")
+    id: Optional[str] = Field(None, description="Message ID")
+    timestamp: Optional[str] = Field(None, description="Message timestamp")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+
 class QueryRequest(BaseModel):
     query: str = Field(..., description="The natural language query")
     model: str = Field(default="gemini", description="The LLM to use (gemini or claude)")
     database_type: str = Field(default="kdb", description="The type of database to query")
     conversation_id: Optional[str] = Field(default=None, description="Conversation ID for context")
+    conversation_history: Optional[List[Dict[str, Any]]] = Field(default=None, description="Recent conversation messages")
+    
+    class Config:
+        # Allow extra fields to be more flexible with client data
+        extra = "allow"
 
 class QueryResponse(BaseModel):
     generated_query: str = Field(..., description="The generated database query")

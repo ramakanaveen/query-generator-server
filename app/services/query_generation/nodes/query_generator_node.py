@@ -1,8 +1,23 @@
-# app/services/query_generation/nodes/query_generator_node.py (RENAMED NODE FILE)
+# app/services/query_generation/nodes/query_generator_node.py
 from typing import Dict, Any
 from langchain.prompts import ChatPromptTemplate
 from app.services.query_generation.prompts.generator_prompts import GENERATOR_PROMPT_TEMPLATE
 from app.core.logging import logger
+
+def format_conversation_history(history):
+    """Format conversation history for the generator prompt."""
+    if not history:
+        return ""
+        
+    formatted = "Conversation Context:\n"
+    for msg in history:
+        role = msg.get("role", "unknown")
+        content = msg.get("content", "")
+        if role == "user":
+            formatted += f"User asked: {content}\n"
+        elif role == "assistant":
+            formatted += f"System generated query: {content}\n"
+    return formatted
 
 async def generate_query(state):
     """
@@ -21,10 +36,14 @@ async def generate_query(state):
         intent = state.intent
         schema = state.schema
         database_type = state.database_type
+        conversation_history = state.conversation_history
         llm = state.llm
         
         # Add thinking step
         state.thinking.append("Generating database query...")
+        
+        # Format conversation history
+        conversation_context = format_conversation_history(conversation_history)
         
         # Use LLM to generate the query
         prompt = ChatPromptTemplate.from_template(GENERATOR_PROMPT_TEMPLATE)
@@ -38,7 +57,8 @@ async def generate_query(state):
             "intent": intent,
             "schema": schema,
             "database_type": database_type,
-            "examples": schema.get("examples", [])
+            "examples": schema.get("examples", []),
+            "conversation_context": conversation_context
         }
         
         # Get the response from the LLM
