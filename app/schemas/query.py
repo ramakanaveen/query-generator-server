@@ -20,7 +20,9 @@ class QueryRequest(BaseModel):
         extra = "allow"
 
 class QueryResponse(BaseModel):
-    generated_query: str = Field(..., description="The generated database query")
+    generated_query: Optional[str] = Field(default=None, description="The generated database query")
+    generated_content: Optional[str] = Field(default=None, description="Generated content for non-query intents")
+    response_type: str = Field(default="query", description="Type of response (query, schema_description, help)")
     execution_id: str = Field(..., description="ID for tracking execution")
     thinking: Optional[List[str]] = Field(default=None, description="LLM thinking steps")
 
