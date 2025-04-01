@@ -1,11 +1,12 @@
 # app/services/query_generator.py
-from typing import Tuple, List, Dict, Any, Optional
+from typing import Tuple, List, Dict, Any, Optional, Union
 import uuid
 from langgraph.graph import StateGraph , END
 from pydantic import BaseModel, Field
 from app.core.logging import logger
 from app.services.query_generation.nodes import (
     query_analyzer,
+    schema_description_node,
     schema_retriever,
     query_generator_node,
     query_validator,
@@ -20,13 +21,23 @@ class QueryGenerationState(BaseModel):
     database_type: str = Field(default="kdb", description="Type of database to query")
     entities: List[str] = Field(default_factory=list, description="Extracted entities from the query")
     intent: Optional[str] = Field(default=None, description="Extracted intent from the query")
-    schema: Dict[str, Any] = Field(default_factory=dict, description="Retrieved schema information")
+    intent_type: str = Field(default="query_generation", description="Type of intent detected")
+    schema_targets: Dict[str, Any] = Field(default_factory=dict, description="Schema targets for schema description intent")
+    help_request: Dict[str, Any] = Field(default_factory=dict, description="Help request details for help intent")
+    query_schema: Dict[str, Any] = Field(default_factory=dict, description="Retrieved schema information")
     generated_query: Optional[str] = Field(default=None, description="Generated database query")
+    generated_content: Optional[str] = Field(default=None, description="Generated content for non-query intents")
     validation_result: Optional[bool] = Field(default=None, description="Whether the query is valid")
     validation_errors: List[str] = Field(default_factory=list, description="Validation errors if any")
     thinking: List[str] = Field(default_factory=list, description="Thinking process during generation")
     conversation_id: Optional[str] = Field(default=None, description="ID of the conversation for context")
     conversation_history: List[Dict[str, Any]] = Field(default_factory=list, description="Conversation history")
+    no_schema_found: bool = Field(default=False, description="Flag indicating if no relevant schema was found")
+    original_query: Optional[str] = Field(default=None, description="Original query before refinement")
+    original_errors: List[str] = Field(default_factory=list, description="Errors in the original query")
+    refinement_guidance: Optional[str] = Field(default=None, description="Guidance for query refinement")
+    refinement_count: int = Field(default=0, description="Number of refinement attempts")
+    max_refinements: int = Field(default=2, description="Maximum number of refinement attempts")
 
 class QueryGenerator:
     """
@@ -48,20 +59,39 @@ class QueryGenerator:
         workflow.add_node("query_generator", query_generator_node.generate_query)
         workflow.add_node("query_validator", query_validator.validate_query)
         workflow.add_node("query_refiner", query_refiner.refine_query)
+        workflow.add_node("schema_description", schema_description_node.generate_schema_description)
         
         # Set the entrypoint
         workflow.set_entry_point("query_analyzer")
         
-        # Add standard edges
-        workflow.add_edge("query_analyzer", "schema_retriever")
+        # Add routing based on intent type
+        workflow.add_conditional_edges(
+            "query_analyzer",
+            lambda state: {
+                "query_generation": "schema_retriever",
+                "schema_description": "schema_description"
+            }.get(state.intent_type, "schema_retriever")
+        )
+        
+        # Add standard edges for query generation path
         workflow.add_edge("schema_retriever", "query_generator")
         workflow.add_edge("query_generator", "query_validator")
         workflow.add_edge("query_refiner", "query_generator")
         
+        # Add schema description path - goes straight to END
+        workflow.add_edge("schema_description", END)
+        
         # Add conditional edge with a simpler approach
         workflow.add_conditional_edges(
             "query_validator",
-            lambda state: "query_refiner" if not state.validation_result else END
+            lambda state: END if state.validation_result else (
+                END if state.refinement_count >= state.max_refinements else "query_refiner"
+            )
+        )
+
+        workflow.add_conditional_edges(
+            "schema_retriever",
+            lambda state: END if state.no_schema_found else "query_generator"
         )
         
         # Compile the workflow
@@ -83,14 +113,14 @@ class QueryGenerator:
         return formatted
     
     async def generate(
-        self, 
-        query: str, 
-        database_type: str = "kdb", 
-        conversation_id: Optional[str] = None,
-        conversation_history: Optional[List[Dict[str, Any]]] = None
-    ) -> Tuple[str, List[str]]:
+    self, 
+    query: str, 
+    database_type: str = "kdb", 
+    conversation_id: Optional[str] = None,
+    conversation_history: Optional[List[Dict[str, Any]]] = None
+) -> Tuple[Union[str, Dict[str, Any]], List[str]]:
         """
-        Generate a database query from natural language.
+        Generate a database query or other content from natural language.
         
         Args:
             query: The natural language query
@@ -99,7 +129,9 @@ class QueryGenerator:
             conversation_history: Optional conversation history for context
             
         Returns:
-            Tuple of (generated_query, thinking_steps)
+            Tuple of (generated_result, thinking_steps) where generated_result can be:
+            - A string (for backward compatibility with query generation)
+            - A dict with intent_type, generated_query, and/or generated_content
         """
         try:
             # Initialize the state
@@ -158,19 +190,56 @@ class QueryGenerator:
                     initial_state.conversation_history = []
             
             # Run the workflow
-            logger.info(f"Starting query generation for: {query}")
+            logger.info(f"Starting processing for query: {query}")
             result = await self.workflow.ainvoke(initial_state)
             
-            # Fix: Extract data from the AddableValuesDict object
-            # The actual result is a dictionary, so we need to access it correctly
-            generated_query = result.get("generated_query", "// No query generated")
+            # Extract result values from the dictionary-like object
             thinking = result.get("thinking", [])
+            intent_type = result.get("intent_type", "query_generation")
             
-            logger.info(f"Generated query: {generated_query}")
-            return generated_query, thinking
-        
+            if intent_type == "query_generation":
+                # Check if no schema was found
+                if result.get('no_schema_found', False):
+                    return {
+                        "intent_type": "query_generation",
+                        "generated_query": "// I don't know how to generate a query for this request. " + 
+                            "I couldn't find any relevant tables in the available schemas. " + 
+                            "Please try a different query or upload relevant schemas."
+                    }, thinking
+                
+                # Return the generated query
+                return {
+                    "intent_type": "query_generation",
+                    "generated_query": result.get("generated_query", "// No query generated")
+                }, thinking
+                
+            elif intent_type == "schema_description":
+                # Return schema description result
+                return {
+                    "intent_type": "schema_description",
+                    "generated_content": result.get("generated_content", "No schema information available.")
+                }, thinking
+                
+            elif intent_type == "help":
+                # Return help content
+                return {
+                    "intent_type": "help",
+                    "generated_content": result.get("generated_content", "No help information available.")
+                }, thinking
+                
+            else:
+                # Unknown intent type - default to query generation
+                logger.warning(f"Unknown intent type: {intent_type}")
+                return {
+                    "intent_type": "query_generation",
+                    "generated_query": "// I'm not sure how to interpret your query. Please try rephrasing it."
+                }, thinking
+            
         except Exception as e:
-            logger.error(f"Error generating query: {str(e)}", exc_info=True)
+            logger.error(f"Error generating response: {str(e)}", exc_info=True)
             logger.error(f"Error type: {type(e)}")
-            # Return a fallback query and the error as thinking
-            return f"// Error generating query: {str(e)}", [f"Error: {str(e)}"]
+            # Return a fallback response and the error as thinking
+            return {
+                "intent_type": "error",
+                "generated_content": f"I encountered an error while processing your request: {str(e)}"
+            }, [f"Error: {str(e)}"]

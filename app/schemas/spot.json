@@ -1,34 +1,96 @@
 {
-  "description": "Spot market trading data",
-  "tables": {
-    "trades": {
-      "description": "Trade records for spot market",
-      "columns": [
-        {"name": "date", "type": "date", "description": "Trade date"},
-        {"name": "time", "type": "time", "description": "Trade time"},
-        {"name": "sym", "type": "symbol", "description": "Ticker symbol"},
-        {"name": "price", "type": "float", "description": "Trade price"},
-        {"name": "size", "type": "long", "description": "Trade size"},
-        {"name": "side", "type": "symbol", "description": "Buy or sell"}
-      ]
-    }
-  },
-  "examples": [
+  "group": "SpotGroup",
+  "schemas": [ 
     {
-      "natural_language": "Show me the top 5 AAPL trades by size today",
-      "query": "xdesc `size select top 5 from trades where date=.z.d, sym=`AAPL"
-    },
-    {
-      "natural_language": "What was the average price of MSFT trades yesterday?",
-      "query": "select avg price from trades where date=.z.d-1, sym=`MSFT"
-    },
-    {
-      "natural_language": "Count all Google trades by side",
-      "query": "select count i by side from trades where date=.z.d, sym=`GOOGL"
-    },
-    {
-      "natural_language": "Show me the largest trades today",
-      "query": "xdesc `size select from trades where date=.z.d "
-    }
+      "schema" : [ 
+        {
+        "name" : "spot",
+        "description" : "Spot market trading data",
+        "tables" : [
+          {
+            "kdb_table_name" : "market_price",
+            "description" : "spot market price",
+            "columns" : [
+              { 
+                "name": "date", 
+                "kdb_type": "d",
+                "type": "Date", 
+                 "column_desc": "Tick Date",
+                 "references": null
+                },
+                {
+                  "name": "time",
+                  "kdb_type": "t",
+                  "type": "Time",
+                  "column_desc": "Tick Time",
+                  "references": null
+                },
+                {
+                  "name": "sym",
+                  "kdb_type": "s",
+                  "type": "Symbol",
+                  "column_desc": "Ticker Symbol",
+                  "references": null
+                },
+                {
+                  "name": "bid",
+                  "kdb_type": "f",
+                  "type": "Float",
+                  "column_desc": "Bid Price",
+                  "references": null
+                },
+                {
+                  "name": "ask",
+                  "kdb_type": "f",
+                  "type": "Float",
+                  "column_desc": "Ask Price",
+                  "references": null
+                },
+                {
+                  "name": "mid",
+                  "kdb_type": "f",
+                  "type": "Float",
+                  "column_desc": "Mid Price",
+                  "references": null
+                },
+                {
+                  "name": "size",
+                  "kdb_type": "j",
+                  "type": "Long",
+                  "column_desc": "Trade Size",
+                  "references": null
+                },
+                {
+                  "name": "side",
+                  "kdb_type": "s",
+                  "type": "Symbol",
+                  "column_desc": "Buy or Sell",
+                  "references": null
+                }
+              
+            ],
+            "examples": [
+              {
+                "natural_language": "Show me the top 5 AAPL trades by size today",
+                "query": "xdesc `size select top 5 from trades where date=.z.d, sym=`AAPL"
+              },
+              {
+                "natural_language": "What was the average price of MSFT trades yesterday?",
+                "query": "select avg price from trades where date=.z.d-1, sym=`MSFT"
+              },
+              {
+                "natural_language": "Count all Google trades by side",
+                "query": "select count i by side from trades where date=.z.d, sym=`GOOGL"
+              },
+              {
+                "natural_language": "Show me the largest trades today",
+                "query": "xdesc `size select from trades where date=.z.d "
+              }
+            ]
+          }
+        ]
+      }
   ]
+}
+  ] 
 }

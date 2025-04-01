@@ -33,3 +33,21 @@ Conversation Context Tips:
 Generate a valid {database_type} query that satisfies the user's request.
 Only provide the query itself, no explanations or comments.
 """
+
+REFINED_PROMPT_TEMPLATE = """
+            You are an expert in {database_type} queries. 
+            
+            User query: {query}
+            
+            Schema information:
+            {schema}
+            
+            Previous query had these issues:
+            {original_errors}
+            
+            Guidance for improvement:
+            {refinement_guidance}
+            
+            Generate a valid {database_type} query that addresses these issues.
+            Only provide the query itself, no explanations or comments.
+            """

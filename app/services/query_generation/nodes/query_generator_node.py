@@ -1,7 +1,7 @@
 # app/services/query_generation/nodes/query_generator_node.py
 from typing import Dict, Any
 from langchain.prompts import ChatPromptTemplate
-from app.services.query_generation.prompts.generator_prompts import GENERATOR_PROMPT_TEMPLATE
+from app.services.query_generation.prompts.generator_prompts import GENERATOR_PROMPT_TEMPLATE, REFINED_PROMPT_TEMPLATE
 from app.core.logging import logger
 
 def format_conversation_history(history):
@@ -34,32 +34,60 @@ async def generate_query(state):
         directives = state.directives
         entities = state.entities
         intent = state.intent
-        schema = state.schema
+        schema = state.query_schema
         database_type = state.database_type
         conversation_history = state.conversation_history
         llm = state.llm
         
+        # Check if this is a refined generation attempt
+        is_refinement = hasattr(state, 'refinement_guidance') and state.refinement_guidance
+        
         # Add thinking step
-        state.thinking.append("Generating database query...")
+        if is_refinement:
+            state.thinking.append("Generating improved query based on refinement guidance...")
+        else:
+            state.thinking.append("Generating database query...")
+            
+        # Check if schema is None
+        if schema is None:
+            state.thinking.append("Cannot generate query: No relevant schema found for this query")
+            state.generated_query = "// I don't know how to generate a query for this request. " + \
+                                   "I couldn't find any relevant tables in the available schemas."
+            return state
         
         # Format conversation history
         conversation_context = format_conversation_history(conversation_history)
         
         # Use LLM to generate the query
-        prompt = ChatPromptTemplate.from_template(GENERATOR_PROMPT_TEMPLATE)
-        chain = prompt | llm
-        
-        # Prepare the input for the LLM
-        input_data = {
-            "query": query,
-            "directives": directives,
-            "entities": entities,
-            "intent": intent,
-            "schema": schema,
-            "database_type": database_type,
-            "examples": schema.get("examples", []),
-            "conversation_context": conversation_context
-        }
+        if is_refinement:
+            # Use a specialized prompt that includes refinement guidance
+            prompt = ChatPromptTemplate.from_template(REFINED_PROMPT_TEMPLATE)
+            chain = prompt | llm
+            
+            # Prepare the input with refinement guidance
+            input_data = {
+                "query": query,
+                "schema": schema,
+                "database_type": database_type,
+                "original_errors": state.original_errors,
+                "refinement_guidance": state.refinement_guidance
+            }
+        else:
+            # Use the standard prompt
+            prompt = ChatPromptTemplate.from_template(GENERATOR_PROMPT_TEMPLATE)
+            chain = prompt | llm
+            
+            # Prepare the standard input
+            input_data = {
+                "query": query,
+                "directives": directives,
+                "entities": entities,
+                "intent": intent,
+                "schema": schema,
+                "database_type": database_type,
+                "examples": schema.get("examples", []),
+                "conversation_context": conversation_context
+            }
         
         # Get the response from the LLM
         response = await chain.ainvoke(input_data)
@@ -68,6 +96,10 @@ async def generate_query(state):
         # Update state with generated query
         state.generated_query = generated_query
         state.thinking.append(f"Generated query: {generated_query}")
+        
+        # Reset validation result since we have a new query
+        state.validation_result = None
+        state.validation_errors = []
         
         return state
     
