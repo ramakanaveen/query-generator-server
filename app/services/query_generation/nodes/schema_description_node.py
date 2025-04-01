@@ -7,17 +7,20 @@ from app.services.query_generation.prompts.schema_description_prompts import SCH
 async def generate_schema_description(state):
     """
     Generate a natural language description of schema information.
-    
-    Args:
-        state: The current state with schema_targets and directives
-        
-    Returns:
-        Updated state with schema description
     """
     try:
-        # Extract relevant information from state
+        # More defensive extraction of state information
+        if not hasattr(state, 'schema_targets') or state.schema_targets is None:
+            # Initialize default schema_targets if missing
+            state.schema_targets = {
+                "tables": state.directives if hasattr(state, 'directives') else [],
+                "columns": [],
+                "detail_level": "standard"
+            }
+            state.thinking.append("No schema targets specified, using directives as targets")
+        
         schema_targets = state.schema_targets
-        directives = state.directives
+        directives = state.directives if hasattr(state, 'directives') else []
         llm = state.llm
         
         # Add thinking step
@@ -30,8 +33,9 @@ async def generate_schema_description(state):
             state.generated_content = "I couldn't find any schema information matching your request."
             return state
             
-        # Format schema information based on detail level
-        formatted_schema = format_schema_for_prompt(schema_info, schema_targets["detail_level"])
+        # Format schema information with a default for detail_level
+        detail_level = schema_targets.get("detail_level", "standard")
+        formatted_schema = format_schema_for_prompt(schema_info, detail_level)
         
         # Generate natural language description using LLM
         prompt = ChatPromptTemplate.from_template(SCHEMA_DESCRIPTION_PROMPT_TEMPLATE)

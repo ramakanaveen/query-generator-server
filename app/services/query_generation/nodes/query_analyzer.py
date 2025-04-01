@@ -27,8 +27,10 @@ async def analyze_query(state):
         intent_type = await determine_intent_type(state, query, directives, llm)
         state.intent_type = intent_type
         state.thinking.append(f"Determined intent type: {intent_type}")
-        
-        # Process specific intent type
+        logger.debug(f"Detected intent_type: {intent_type}")
+        if intent_type == "schema_description":
+            logger.debug("Processing schema description intent...")
+            # Process specific intent type
         if intent_type == "query_generation":
             await process_query_generation_intent(state, query, directives, llm)
         elif intent_type == "schema_description":
@@ -39,6 +41,9 @@ async def analyze_query(state):
             # Handle unknown intent - default to query generation
             state.thinking.append(f"Unknown intent type '{intent_type}', defaulting to query generation")
             await process_query_generation_intent(state, query, directives, llm)
+        
+        # Check state after processing
+        logger.debug(f"State after processing: schema_targets={state.schema_targets}")
         
         return state
     
@@ -214,21 +219,38 @@ async def process_schema_description_intent(state, query, directives):
     """
     Process a schema description intent by extracting targets and detail level.
     """
-    # Extract which tables or columns the user is asking about
-    table_targets = extract_table_targets(query, directives)
-    column_targets = extract_column_targets(query)
-    detail_level = determine_detail_level(query)
+    try:
+        # Extract which tables or columns the user is asking about
+        table_targets = extract_table_targets(query, directives)
+        column_targets = extract_column_targets(query)
+        detail_level = determine_detail_level(query)
+        
+        # Store schema targets in state with debug output
+        state.schema_targets = {
+            "tables": table_targets,
+            "columns": column_targets,
+            "detail_level": detail_level
+        }
+        
+        state.thinking.append(f"Schema description targets: tables={table_targets}, columns={column_targets}")
+        state.thinking.append(f"Schema description detail level: {detail_level}")
+        
+        # For debugging, log the entire schema_targets dict
+        logger.debug(f"Created schema_targets: {state.schema_targets}")
+        
+    except Exception as e:
+        # Handle errors but ensure we still set a default schema_targets
+        logger.error(f"Error processing schema description intent: {str(e)}", exc_info=True)
+        state.thinking.append(f"Error processing intent: {str(e)}")
+        
+        # Set default values even on error
+        state.schema_targets = {
+            "tables": directives,
+            "columns": [],
+            "detail_level": "standard"
+        }
     
-    # Store schema targets in state
-    state.schema_targets = {
-        "tables": table_targets,
-        "columns": column_targets,
-        "detail_level": detail_level
-    }
-    
-    state.thinking.append(f"Schema description targets: tables={table_targets}, columns={column_targets}")
-    state.thinking.append(f"Schema description detail level: {detail_level}")
-
+    return state
 async def process_help_intent(state, query, directives):
     """
     Process a help intent by identifying the help topic.
