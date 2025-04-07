@@ -110,3 +110,72 @@ async def retry_query(request: RetryRequest):
     except Exception as e:
         logger.error(f"Exception in retry_query endpoint: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Query retry failed: {str(e)}")
+
+
+
+@router.post("/feedback/positive")
+async def save_positive_feedback(request: Request):
+    """
+    Save positive feedback and store the query as a verified example.
+    """
+    try:
+        body = await request.json()
+        
+        feedback_manager = FeedbackManager()
+        feedback = await feedback_manager.save_positive_feedback(
+            query_id=body.get("query_id"),
+            user_id=body.get("user_id"),
+            original_query=body.get("original_query", ""),
+            generated_query=body.get("generated_query", ""),
+            conversation_id=body.get("conversation_id"),
+            metadata=body.get("metadata", {})
+        )
+        
+        return {
+            "id": feedback.get("id", str(uuid.uuid4())),
+            "status": "success",
+            "message": "Positive feedback saved successfully"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error saving positive feedback: {str(e)}")
+        logger.error(traceback.format_exc())
+        return {
+            "id": str(uuid.uuid4()),
+            "status": "success",
+            "message": "Feedback acknowledged (with server error)"
+        }
+
+@router.post("/feedback/negative")
+async def save_negative_feedback(request: Request):
+    """
+    Save negative feedback with details about what was wrong.
+    """
+    try:
+        body = await request.json()
+        
+        feedback_manager = FeedbackManager()
+        feedback = await feedback_manager.save_negative_feedback(
+            query_id=body.get("query_id"),
+            user_id=body.get("user_id"),
+            original_query=body.get("original_query", ""),
+            generated_query=body.get("generated_query", ""),
+            feedback_text=body.get("feedback_text", ""),
+            conversation_id=body.get("conversation_id"),
+            metadata=body.get("metadata", {})
+        )
+        
+        return {
+            "id": feedback.get("id", str(uuid.uuid4())),
+            "status": "success",
+            "message": "Negative feedback saved successfully"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error saving negative feedback: {str(e)}")
+        logger.error(traceback.format_exc())
+        return {
+            "id": str(uuid.uuid4()),
+            "status": "success",
+            "message": "Feedback acknowledged (with server error)"
+        }

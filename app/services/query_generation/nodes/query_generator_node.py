@@ -1,8 +1,9 @@
 # app/services/query_generation/nodes/query_generator_node.py
-from typing import Dict, Any
+from typing import Dict, Any, List
 from langchain.prompts import ChatPromptTemplate
 from app.services.query_generation.prompts.generator_prompts import GENERATOR_PROMPT_TEMPLATE, REFINED_PROMPT_TEMPLATE
 from app.core.logging import logger
+from app.services.feedback_manager import FeedbackManager
 
 def format_conversation_history(history):
     """Format conversation history for the generator prompt."""
@@ -17,6 +18,18 @@ def format_conversation_history(history):
             formatted += f"User asked: {content}\n"
         elif role == "assistant":
             formatted += f"System generated query: {content}\n"
+    return formatted
+
+def format_few_shot_examples(examples):
+    """Format few-shot examples for the generator prompt."""
+    if not examples or len(examples) == 0:
+        return ""
+        
+    formatted = "Few-Shot Examples:\n"
+    for i, example in enumerate(examples, 1):
+        formatted += f"Example {i}:\n"
+        formatted += f"User query: {example.get('original_query', '')}\n"
+        formatted += f"Generated query: {example.get('generated_query', '')}\n\n"
     return formatted
 
 async def generate_query(state):
@@ -37,6 +50,8 @@ async def generate_query(state):
         schema = state.query_schema
         database_type = state.database_type
         conversation_history = state.conversation_history
+        user_id = state.user_id if hasattr(state, 'user_id') else None
+        conversation_summary = state.conversation_summary if hasattr(state, 'conversation_summary') else None
         llm = state.llm
         
         # Check if this is a refined generation attempt
@@ -58,6 +73,40 @@ async def generate_query(state):
         # Format conversation history
         conversation_context = format_conversation_history(conversation_history)
         
+        # Add conversation summary if available
+        if conversation_summary:
+            summary_context = f"Previous Conversation Summary: {conversation_summary}\n\n"
+            state.thinking.append(f"Using conversation summary: {conversation_summary[:100]}...")
+        else:
+            summary_context = ""
+        
+        # Find similar verified queries for few-shot learning
+        similar_examples = []
+        if not is_refinement:  # Only use few-shot for initial generation, not refinement
+            try:
+                feedback_manager = FeedbackManager()
+                similar_examples = await feedback_manager.find_similar_verified_queries(
+                    query_text=query,
+                    user_id=user_id,
+                    similarity_threshold=0.6,
+                    limit=3
+                )
+                
+                if similar_examples and len(similar_examples) > 0:
+                    state.thinking.append(f"Found {len(similar_examples)} similar verified queries for few-shot learning")
+                    for i, example in enumerate(similar_examples, 1):
+                        note = "user's own example" if example.get('is_user_specific', False) else "shared example"
+                        state.thinking.append(
+                            f"Example {i} ({note}): '{example['original_query']}' → "
+                            f"'{example['generated_query']}' (similarity: {example['similarity']:.2f})"
+                        )
+            except Exception as e:
+                logger.error(f"Error finding few-shot examples: {str(e)}")
+                state.thinking.append(f"Could not retrieve few-shot examples: {str(e)}")
+        
+        # Format few-shot examples
+        few_shot_examples = format_few_shot_examples(similar_examples)
+        
         # Use LLM to generate the query
         if is_refinement:
             # Use a specialized prompt that includes refinement guidance
@@ -73,8 +122,10 @@ async def generate_query(state):
                 "refinement_guidance": state.refinement_guidance
             }
         else:
-            # Use the standard prompt
-            prompt = ChatPromptTemplate.from_template(GENERATOR_PROMPT_TEMPLATE)
+            # Use the standard prompt with few-shot examples
+            # Construct the final prompt with all components
+            final_prompt_template = f"{GENERATOR_PROMPT_TEMPLATE}\n\n{few_shot_examples}\n{summary_context}{conversation_context}"
+            prompt = ChatPromptTemplate.from_template(final_prompt_template)
             chain = prompt | llm
             
             # Prepare the standard input
@@ -104,7 +155,7 @@ async def generate_query(state):
         return state
     
     except Exception as e:
-        logger.error(f"Error in query generator: {str(e)}")
+        logger.error(f"Error in query generator: {str(e)}", exc_info=True)
         state.thinking.append(f"Error generating query: {str(e)}")
         # Still return the state to continue the workflow
         state.generated_query = f"// Error generating query: {str(e)}"

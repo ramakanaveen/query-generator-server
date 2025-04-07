@@ -79,3 +79,4 @@ wsproto==1.2.0
 zstandard==0.23.0
 asyncpg==0.30.0
 python-multipart==0.0.20
+scipy==1.13.1

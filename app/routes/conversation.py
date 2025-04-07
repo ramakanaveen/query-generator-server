@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends
 import uuid
-from typing import List
+from typing import Any, Dict, List
 
 from app.schemas.conversation import Conversation, Message
 from app.services.conversation_manager import ConversationManager
@@ -64,3 +64,35 @@ async def add_message(conversation_id: str, message: Message):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to add message: {str(e)}")
+
+# app/routes/conversation.py - Update this file
+
+@router.get("/user/{user_id}/conversations", response_model=List[Conversation])
+async def list_user_conversations(user_id: str):
+    """
+    List all conversations for a specific user.
+    """
+    try:
+        conversation_manager = ConversationManager()
+        conversations = await conversation_manager.get_user_conversations(user_id)
+        return conversations
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list conversations: {str(e)}")
+
+@router.put("/conversations/{conversation_id}", response_model=Conversation)
+async def update_conversation(conversation_id: str, updates: Dict[str, Any]):
+    """
+    Update a conversation's metadata (title, archived status).
+    """
+    try:
+        conversation_manager = ConversationManager()
+        conversation = await conversation_manager.update_conversation(conversation_id, updates)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return conversation
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update conversation: {str(e)}")
