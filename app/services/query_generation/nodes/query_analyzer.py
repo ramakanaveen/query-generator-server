@@ -182,6 +182,25 @@ async def process_query_generation_intent(state, query, directives, llm):
     """
     Process a query generation intent by extracting entities and query intent.
     """
+    # Add context from conversation history if available
+    conversation_context = ""
+    previous_directives = []
+    
+    if hasattr(state, 'conversation_history') and state.conversation_history:
+        # Extract directives from previous messages
+        for msg in state.conversation_history:
+            if msg.get('role') == 'user':
+                directive_matches = re.findall(r'@([A-Z]+)', msg.get('content', ''))
+                for directive in directive_matches:
+                    if directive not in previous_directives:
+                        previous_directives.append(directive)
+    
+    # If current query has no directives but previous ones exist, use those
+    if not directives and previous_directives:
+        state.thinking.append(f"No directives in current query, using previous directives: {previous_directives}")
+        state.directives = previous_directives
+        directives = previous_directives
+        
     # Use LLM to analyze the query for entities and query intent
     prompt = ChatPromptTemplate.from_template(ANALYZER_PROMPT_TEMPLATE)
     chain = prompt | llm

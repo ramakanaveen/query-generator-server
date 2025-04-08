@@ -177,6 +177,8 @@ class ConversationManager:
         except Exception as e:
             logger.error(f"Error getting user conversations: {str(e)}", exc_info=True)
             return []
+    # Updating the _parse_json_fields method in the ConversationManager class
+
     def _parse_json_fields(self, data, fields):
         """Parse JSON fields to Python objects."""
         result = data.copy()
@@ -194,6 +196,9 @@ class ConversationManager:
                 # Handle None values
                 elif result[field] is None:
                     result[field] = default_value
+                # Ensure metadata is always a dict, not a string representation of empty dict
+                elif field == 'metadata' and result[field] == '{}':
+                    result[field] = {}
         
         return result
     async def add_message(self, conversation_id: str, message: Dict[str, Any]) -> Dict[str, Any]:
