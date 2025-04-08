@@ -58,6 +58,10 @@ async def add_message(conversation_id: str, message: Message):
     try:
         conversation_manager = ConversationManager()
         added_message = await conversation_manager.add_message(conversation_id, message)
+        # Convert back to a Message model if needed
+        if not isinstance(added_message, Message):
+            return Message(**added_message)
+        
         return added_message
     
     except ValueError as e:
