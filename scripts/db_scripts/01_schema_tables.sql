@@ -120,7 +120,7 @@ CREATE TABLE verified_queries (
 -- Create the conversations table with all needed fields
 CREATE TABLE conversations (
     id VARCHAR(100) PRIMARY KEY,
-    user_id VARCHAR(100),
+    user_id VARCHAR(100) NOT NULL,
     title VARCHAR(255),
     summary TEXT,
     messages JSONB DEFAULT '[]',

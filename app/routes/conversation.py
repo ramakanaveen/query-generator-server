@@ -1,29 +1,52 @@
 import re
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 import uuid
 from typing import Any, Dict, List
 
+
+
 from app.schemas.conversation import Conversation, Message
 from app.services.conversation_manager import ConversationManager
+from app.core.logging import logger
 
 router = APIRouter()
 
-@router.post("/conversations", response_model=Conversation)
-async def create_conversation():
+# In your conversations.py route
+
+@router.post("/conversations")
+async def create_conversation(request: Request):
     """
     Create a new conversation.
     """
     try:
+        # Get request body
+        body = await request.json()
+        logger.info(f"Received conversation creation request: {body}")
+
+        user_id = body.get("user_id")
+        title = body.get("title")
+        metadata = body.get("metadata", {})
+
+        logger.info(f"Creating conversation for user_id: {user_id}, title: {title}")
+
         conversation_manager = ConversationManager()
-        conversation = await conversation_manager.create_conversation()
-        
-        # Ensure metadata is a dictionary (and not a string)
-        if isinstance(conversation.get("metadata"), str):
-            conversation["metadata"] = {}  # Default to empty dict
-        
+        conversation = await conversation_manager.create_conversation(
+            user_id=user_id,
+            title=title,
+            metadata=metadata
+        )
+
+        logger.info(f"Successfully created conversation: {conversation}")
         return conversation
-    
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in request: {e}")
+        raise HTTPException(status_code=400, detail="Invalid JSON in request body")
     except Exception as e:
+        logger.error(f"Error creating conversation: {str(e)}", exc_info=True)
+        # Log the full stack trace
+        import traceback
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Failed to create conversation: {str(e)}")
 
 @router.get("/conversations", response_model=List[Conversation])

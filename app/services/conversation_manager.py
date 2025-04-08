@@ -28,27 +28,27 @@ class ConversationManager:
         """Get a database connection."""
         return await asyncpg.connect(self.db_url)
     
-    async def create_conversation(self, user_id=None, title=None) -> Dict[str, Any]:
-        """Create a new conversation with optional user ID and title."""
+    async def create_conversation(self, user_id: str, title: str = None, metadata: Dict = None) -> Dict[str, Any]:
         try:
             conversation_id = str(uuid.uuid4())
             
             conn = await self._get_db_connection()
             try:
-                # Insert new conversation
+                # Insert new conversation with required user_id
                 await conn.execute(
                     """
                     INSERT INTO conversations 
-                    (id, user_id, title, messages, created_at, updated_at, last_accessed_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    (id, user_id, title, messages, created_at, updated_at, last_accessed_at, metadata)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     """,
                     conversation_id,
-                    user_id,
+                    user_id,  # Make sure this is passed through
                     title,
                     '[]',  # Empty JSON array for messages
                     datetime.now(),
                     datetime.now(),
-                    datetime.now()
+                    datetime.now(),
+                    json.dumps(metadata or {})
                 )
                 
                 # Get the created conversation
@@ -59,32 +59,14 @@ class ConversationManager:
                 
                 # Convert to dict
                 conversation = dict(row)
-                
-                # Convert messages JSONB to Python list
-                try:
-                    messages = json.loads(conversation.get("messages", "[]"))
-                except:
-                    messages = []
-                conversation["messages"] = messages
+                conversation["messages"] = json.loads(conversation.get("messages", "[]"))
                 
                 return conversation
             finally:
                 await conn.close()
         except Exception as e:
             logger.error(f"Error creating conversation: {str(e)}", exc_info=True)
-            # Fallback to in-memory for development
-            conversation = {
-                "id": conversation_id,
-                "user_id": user_id,
-                "title": title,
-                "messages": [],
-                "created_at": datetime.now(),
-                "updated_at": datetime.now(),
-                "last_accessed_at": datetime.now(),
-                "is_archived": False,
-                "metadata": {}
-            }
-            return conversation
+            raise
     
     async def get_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         """Get a conversation by ID."""
