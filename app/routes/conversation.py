@@ -63,6 +63,20 @@ async def list_conversations():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list conversations: {str(e)}")
 
+@router.get("/conversations/verified-info")
+async def get_conversations_with_verified_queries():
+    try:
+        conversation_manager = ConversationManager()
+        conversation_ids = await conversation_manager.get_conversations_with_verified_queries()
+        
+        return {
+            "conversation_ids": conversation_ids
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in verified queries endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
 @router.get("/conversations/{conversation_id}", response_model=Conversation)
 async def get_conversation(conversation_id: str):
     """
@@ -243,3 +257,4 @@ async def delete_conversation(conversation_id: str):
             raise HTTPException(status_code=404, detail="Conversation not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+

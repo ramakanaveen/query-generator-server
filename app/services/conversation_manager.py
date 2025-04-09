@@ -378,3 +378,30 @@ class ConversationManager:
         except Exception as e:
             logger.error(f"Error deleting conversation {conversation_id}: {str(e)}", exc_info=True)
             raise Exception(f"Failed to delete conversation: {str(e)}")
+    
+    async def get_conversations_with_verified_queries(self) -> List[str]:
+        """
+        Get list of conversation IDs that have verified queries.
+        
+        Returns:
+            List[str]: List of conversation IDs
+        """
+        try:
+            conn = await self._get_db_connection()
+            try:
+                # Get conversation IDs that have verified queries
+                query = """
+                SELECT DISTINCT conversation_id 
+                FROM verified_queries 
+                WHERE conversation_id IS NOT NULL
+                """
+                results = await conn.fetch(query)
+                
+                return [str(row['conversation_id']) for row in results]
+                
+            finally:
+                await conn.close()
+                
+        except Exception as e:
+            logger.error(f"Error getting conversations with verified queries: {str(e)}", exc_info=True)
+            raise Exception(f"Failed to get conversations with verified queries: {str(e)}")
