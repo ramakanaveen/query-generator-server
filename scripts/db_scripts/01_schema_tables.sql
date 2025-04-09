@@ -176,3 +176,17 @@ CREATE TABLE query_feedback (
     feedback_data JSONB NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE verified_queries 
+DROP CONSTRAINT verified_queries_conversation_id_fkey,
+ADD CONSTRAINT verified_queries_conversation_id_fkey 
+    FOREIGN KEY (conversation_id) 
+    REFERENCES conversations(id) 
+    ON DELETE CASCADE;
+
+ALTER TABLE failed_queries 
+DROP CONSTRAINT IF EXISTS failed_queries_conversation_id_fkey,
+ADD CONSTRAINT failed_queries_conversation_id_fkey 
+    FOREIGN KEY (conversation_id) 
+    REFERENCES conversations(id) 
+    ON DELETE CASCADE;
