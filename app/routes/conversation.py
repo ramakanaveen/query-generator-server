@@ -1,3 +1,4 @@
+import json
 import re
 from fastapi import APIRouter, HTTPException, Depends, Request
 import uuid
@@ -230,3 +231,15 @@ async def get_conversation_title(conversation_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate title: {str(e)}")
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str):
+    try:
+        conversation_manager = ConversationManager()
+        success = await conversation_manager.delete_conversation(conversation_id)
+        if success:
+            return {"status": "success"}
+        else:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

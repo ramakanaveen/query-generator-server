@@ -340,3 +340,41 @@ class ConversationManager:
             conversation_id=conversation_id,
             updates={"summary": summary}
         ) is not None
+    async def delete_conversation(self, conversation_id: str) -> bool:
+        """
+        Delete a conversation and all its messages.
+        
+        Args:
+            conversation_id: ID of the conversation to delete
+            
+        Returns:
+            bool: True if deletion was successful, False if conversation not found
+        """
+        try:
+            conn = await self._get_db_connection()
+            try:
+                # Check if conversation exists
+                exists = await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = $1)",
+                    conversation_id
+                )
+                
+                if not exists:
+                    logger.warning(f"Attempted to delete non-existent conversation: {conversation_id}")
+                    return False
+                
+                # Delete the conversation
+                await conn.execute(
+                    "DELETE FROM conversations WHERE id = $1",
+                    conversation_id
+                )
+                
+                logger.info(f"Successfully deleted conversation: {conversation_id}")
+                return True
+                
+            finally:
+                await conn.close()
+                
+        except Exception as e:
+            logger.error(f"Error deleting conversation {conversation_id}: {str(e)}", exc_info=True)
+            raise Exception(f"Failed to delete conversation: {str(e)}")
