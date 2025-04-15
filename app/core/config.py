@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     
     # KDB settings
     KDB_HOST: str = os.getenv("KDB_HOST", "localhost")
-    KDB_PORT: int = int(os.getenv("KDB_PORT", "5000"))
+    KDB_PORT: int = int(os.getenv("KDB_PORT", "5001"))
     
     # CORS settings
     CORS_ORIGINS: List[str] = [

@@ -32,5 +32,16 @@ class ExecutionRequest(BaseModel):
     params: Optional[Dict[str, Any]] = Field(default={}, description="Query parameters")
 
 class ExecutionResponse(BaseModel):
+    """
+    Response model for query execution with enhanced pagination support
+    """
     results: List[Dict[str, Any]] = Field(..., description="Query results")
-    metadata: Dict[str, Any] = Field(..., description="Execution metadata")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Execution metadata")
+    pagination: Optional[Dict[str, Any]] = Field(
+        default_factory=lambda: {
+            "currentPage": 0,
+            "totalPages": 1,
+            "totalRows": 0
+        }, 
+        description="Pagination information"
+    )
