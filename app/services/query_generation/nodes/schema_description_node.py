@@ -2,8 +2,9 @@
 from typing import Dict, Any
 from langchain.prompts import ChatPromptTemplate
 from app.core.logging import logger
+from app.core.profiling import timeit
 from app.services.query_generation.prompts.schema_description_prompts import SCHEMA_DESCRIPTION_PROMPT_TEMPLATE
-
+@timeit
 async def generate_schema_description(state):
     """
     Generate a natural language description of schema information.

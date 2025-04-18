@@ -1,23 +1,43 @@
 # app/services/query_generation/nodes/query_generator_node.py
 from typing import Dict, Any, List
 from langchain.prompts import ChatPromptTemplate
+
+from app.core.profiling import timeit
 from app.services.query_generation.prompts.generator_prompts import GENERATOR_PROMPT_TEMPLATE, REFINED_PROMPT_TEMPLATE
 from app.core.logging import logger
 from app.services.feedback_manager import FeedbackManager
 
 def format_conversation_history(history):
-    """Format conversation history for the generator prompt."""
+    """Format conversation history for the generator prompt with better follow-up handling."""
     if not history:
         return ""
-        
+
     formatted = "Conversation Context:\n"
+
+    # Add the last query and its response for better context
+    last_user_query = None
+    last_assistant_response = None
+
     for msg in history:
         role = msg.get("role", "unknown")
         content = msg.get("content", "")
+
         if role == "user":
-            formatted += f"User asked: {content}\n"
-        elif role == "assistant":
-            formatted += f"System generated query: {content}\n"
+            last_user_query = content
+        elif role == "assistant" and last_user_query:  # Only capture response to a known query
+            last_assistant_response = content
+
+            # Add this query-response pair to context
+            formatted += f"User asked: {last_user_query}\n"
+            formatted += f"System generated query: {content}\n\n"
+
+            # Reset for next pair
+            last_user_query = None
+
+    # If we have a dangling user query with no response
+    if last_user_query:
+        formatted += f"User asked: {last_user_query}\n"
+
     return formatted
 
 def format_few_shot_examples(examples):
@@ -32,6 +52,7 @@ def format_few_shot_examples(examples):
         formatted += f"Generated query: {example.get('generated_query', '')}\n\n"
     return formatted
 
+@timeit
 async def generate_query(state):
     """
     Generate a database query based on the analysis and schema.

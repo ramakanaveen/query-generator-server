@@ -1,15 +1,27 @@
+# app/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import socketio
+from contextlib import asynccontextmanager
 
 from app.routes import query, conversation, websocket, directives, feedback
 from app.core.config import settings
 from app.routes import schema_management
+from app.core.db import db_pool
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Initialize resources
+    await db_pool.initialize()
+    yield
+    # Shutdown: Cleanup resources
+    await db_pool.close()
 
 app = FastAPI(
     title="Query Generator API",
     description="API for generating database queries from natural language",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # Set up CORS

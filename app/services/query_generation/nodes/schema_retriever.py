@@ -1,16 +1,49 @@
 # app/services/query_generation/nodes/schema_retriever.py
 import re
+import time
+
+from app.core.profiling import timeit
 from app.services.schema_management import SchemaManager
 from app.core.logging import logger
 
+# Schema cache (in-memory)
+_schema_cache = {}
+_schema_cache_ttl = 300  # 5 minutes
+_last_cleanup = 0
+
+def _get_cache_key(query_text, directives, database_type):
+    """Generate a cache key for schema retrieval."""
+    directive_str = ",".join(sorted(directives)) if directives else ""
+    return f"{database_type}:{directive_str}:{query_text}"
+
+def _cleanup_cache():
+    """Clean up expired cache entries."""
+    global _last_cleanup
+
+    now = time.time()
+    # Only cleanup every minute
+    if now - _last_cleanup < 60:
+        return
+
+    expired_keys = []
+    for key, (timestamp, _) in _schema_cache.items():
+        if now - timestamp > _schema_cache_ttl:
+            expired_keys.append(key)
+
+    for key in expired_keys:
+        del _schema_cache[key]
+
+    _last_cleanup = now
+
+@timeit
 async def retrieve_schema(state):
     """
     Retrieve schema information based on directives and entities using vector similarity search.
     Also handles follow-up questions by reusing schema context from previous successful queries.
-    
+
     Args:
         state: The current state of the workflow
-        
+
     Returns:
         Updated state with schema information
     """
@@ -21,43 +54,43 @@ async def retrieve_schema(state):
         entities = state.entities
         database_type = state.database_type
         conversation_history = state.conversation_history if hasattr(state, 'conversation_history') else []
-        
+
         # Add thinking step
         state.thinking.append("Retrieving schema information...")
-        
+
+        # Check cache first
+        cache_key = _get_cache_key(query_text, directives, database_type)
+        _cleanup_cache()
+
+        if cache_key in _schema_cache:
+            cached_timestamp, cached_schema = _schema_cache[cache_key]
+
+            # If the cache is valid, use it
+            if time.time() - cached_timestamp <= _schema_cache_ttl:
+                state.thinking.append("Using cached schema information")
+                state.query_schema = cached_schema
+                return state
+
         # Initialize schema manager
         schema_manager = SchemaManager()
         schemas_exist = await schema_manager.check_schemas_available()
-        
+
         if not schemas_exist:
             state.thinking.append("No schemas found in the database. Please upload schema information first.")
             state.query_schema = None
             state.no_schema_found = True
             return state
-        
+
         # First determine if this is likely a follow-up or a new question
         is_follow_up = False
-        
-        # 1. Check for follow-up linguistic patterns
+
+        # Check for follow-up linguistic patterns
         follow_up_patterns = [
-            "change", "modify", "update", "instead", "but", "rather", 
-            "change to", "switch to", "yesterday", "show me", "can you"
+            "change", "modify", "update", "instead", "but", "rather",
+            "change to", "switch to", "yesterday", "can you"
         ]
         is_follow_up = any(token in query_text.lower() for token in follow_up_patterns)
-        # has_follow_up_words = any(token in query_text.lower() for token in follow_up_patterns)
-        
-        # # 2. Check if it has its own directives (suggesting a new query)
-        # has_own_directives = len(directives) > 0
-        
-        # # 3. Decide if it's a follow-up
-        # # - If it has follow-up words and NO directives, likely a follow-up
-        # # - If it has its own directives, likely a new query even with follow-up words
-        # is_follow_up = has_follow_up_words and not has_own_directives
-        
-        # state.thinking.append(f"Query analysis: follow-up words: {has_follow_up_words}, " +
-        #                      f"has directives: {has_own_directives}, " +
-        #                      f"classified as follow-up: {is_follow_up}")
-        
+
         # BRANCH 1: Handle follow-up questions by reusing previous schema context
         if is_follow_up and conversation_history:
             state.thinking.append("Processing as follow-up question...")
@@ -79,20 +112,45 @@ async def retrieve_schema(state):
                 state.thinking.append(f"Using directives from conversation history: {previous_directives}")
                 state.directives = previous_directives
                 directives = previous_directives
-            
+
             # Go through messages in reverse to find most recent successful query
             for msg in reversed(conversation_history):
                 if msg.get('role') == 'assistant':
                     content = msg.get('content', '')
-                    # Look for typical KDB query patterns that would indicate a successful query
-                    if 'select from ' in content.lower() and not 'error' in content.lower():
-                        # Extract table names from the query
-                        table_matches = re.findall(r'from\s+(\w+)', content.lower())
-                        if table_matches:
-                            previous_tables.extend(table_matches)
-                            state.thinking.append(f"Found previous successful query using tables: {previous_tables}")
+
+                    # Avoid processing if it looks like an error message
+                    if 'error' in content.lower():
+                        continue
+
+                    # --- MODIFIED SECTION START ---
+                    # Regex to detect SELECT query patterns (KDB/SQL like) and capture the first table name after FROM
+                    # \bselect\s+ : Matches "select" at a word boundary, followed by space(s)
+                    # .*?         : Matches any characters non-greedily (columns, functions, etc.)
+                    # \s+from\s+  : Matches " from " with space(s) around it
+                    # (\S+)       : Captures the table name (one or more non-whitespace characters) into group 1
+                    # re.IGNORECASE: Makes the match case-insensitive
+                    # re.DOTALL    : Allows '.' to match newline characters if the query spans multiple lines
+                    match = re.search(r'\bselect\s+.*?\s+from\s+(\S+)', content, re.IGNORECASE | re.DOTALL)
+
+                    if match:
+                        # Extract the captured table name (group 1)
+                        table_name = match.group(1)
+
+                        # Optional: Clean up potential backticks or quotes if the regex captures them
+                        # table_name = table_name.strip('`"')
+
+                        # Basic check to ensure it looks like a table name (avoids matching subqueries like 'from (select..)')
+                        # You might adjust this check based on your expected table name patterns
+                        if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
+                            if table_name not in previous_tables: # Avoid duplicates
+                                previous_tables.append(table_name)
+                            state.thinking.append(f"Found previous successful query using table: {table_name}")
+                            # Found the most recent valid query, stop searching
                             break
-            
+                        else:
+                            state.thinking.append(f"Detected SELECT pattern, but extracted name '{table_name}' doesn't look like a simple table name. Continuing search.")
+                    # --- MODIFIED SECTION END ---
+
             if previous_tables:
                 # Directly retrieve tables by name
                 relevant_tables = []
@@ -142,12 +200,13 @@ async def retrieve_schema(state):
                     
                     # Add all tables to the schema
                     combined_schema["tables"].update(tables_by_schema[schema_name]["tables"])
-                    
-                    # Get examples for these tables if available
-                    # This would need implementation based on your system
-                    
+
                     # Update state with combined schema
                     state.query_schema = combined_schema
+
+                    # Update cache
+                    _schema_cache[cache_key] = (time.time(), combined_schema)
+
                     state.thinking.append(
                         f"Built schema from {len(relevant_tables)} tables based on previous query context"
                     )
@@ -219,13 +278,13 @@ async def retrieve_schema(state):
             for schema_name, schema in tables_by_schema.items():
                 if schema_name != primary_schema_name:
                     combined_schema["tables"].update(schema["tables"])
-            
-            # Get examples for these tables
-            table_ids = [table["id"] for table in relevant_tables if "id" in table]
-            # Examples retrieval would be implemented based on your system
-            
+
             # Update state with combined schema
             state.query_schema = combined_schema
+
+            # Update cache
+            _schema_cache[cache_key] = (time.time(), combined_schema)
+
             state.thinking.append(
                 f"Built schema from {len(relevant_tables)} tables across {len(tables_by_schema)} schemas"
             )
@@ -351,7 +410,7 @@ async def find_tables_by_name(schema_manager, name):
             
         finally:
             await conn.close()
-            
+
     except Exception as e:
         logger.error(f"Error finding tables by name: {str(e)}", exc_info=True)
         return None

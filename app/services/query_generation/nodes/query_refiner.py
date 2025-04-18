@@ -1,9 +1,11 @@
 # app/services/query_generation/nodes/query_refiner.py
 from typing import Dict, Any
 from langchain.prompts import ChatPromptTemplate
+
+from app.core.profiling import timeit
 from app.services.query_generation.prompts.refiner_prompts import REFINER_PROMPT_TEMPLATE
 from app.core.logging import logger
-
+@timeit
 async def refine_query(state):
     """
     Create improved guidance for query generation based on validation errors.

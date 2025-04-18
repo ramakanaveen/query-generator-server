@@ -2,7 +2,10 @@
 import re
 from typing import Dict, Any
 from app.core.logging import logger
+from app.core.profiling import timeit
 
+
+@timeit
 async def validate_query(state):
     """
     Validate the generated query for syntax and safety.
