@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     # CORS settings
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",  # React development server
+        "http://localhost:3001",
         "http://localhost:8000",  # For local testing
         "https://your-production-domain.com",
     ]

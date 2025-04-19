@@ -190,3 +190,18 @@ ADD CONSTRAINT failed_queries_conversation_id_fkey
     FOREIGN KEY (conversation_id) 
     REFERENCES conversations(id) 
     ON DELETE CASCADE;
+
+-- Add raw_json column to schema_versions table
+ALTER TABLE schema_versions ADD COLUMN IF NOT EXISTS raw_json JSONB;
+
+-- Add is_draft flag for work in progress
+ALTER TABLE schema_versions ADD COLUMN IF NOT EXISTS is_draft BOOLEAN DEFAULT false;
+
+-- Add version_name for user-friendly version naming
+ALTER TABLE schema_versions ADD COLUMN IF NOT EXISTS version_name VARCHAR(100);
+
+-- Make sure we have the appropriate indexes for performance
+CREATE INDEX IF NOT EXISTS idx_schema_versions_schema_id ON schema_versions(schema_id);
+CREATE INDEX IF NOT EXISTS idx_schema_versions_status ON schema_versions(status);
+
+ALTER TABLE schema_versions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE;

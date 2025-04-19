@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import socketio
 from contextlib import asynccontextmanager
 
-from app.routes import query, conversation, websocket, directives, feedback
+from app.routes import query, conversation, websocket, directives, feedback, schema_manager
 from app.core.config import settings
 from app.routes import schema_management
 from app.core.db import db_pool
@@ -39,7 +39,7 @@ app.include_router(conversation.router, prefix="/api/v1", tags=["conversation"])
 app.include_router(directives.router, prefix="/api/v1", tags=["directives"])
 app.include_router(feedback.router, prefix="/api/v1", tags=["feedback"])
 app.include_router(schema_management.router, prefix="/api/v1", tags=["schema"])
-
+app.include_router(schema_manager.router, prefix="/api/v1", tags=["schema-manager"])
 # Socket.IO setup
 sio = socketio.AsyncServer(
     async_mode="asgi",
