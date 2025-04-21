@@ -796,7 +796,7 @@ class SchemaManager:
                     # Create schema version
                     version_id = await self.create_schema_version(
                         schema_id=schema_id,
-                        version=1,
+                        # version=1,
                         created_by=user_id,
                         notes=f"Initial import from {os.path.basename(file_path)}"
                     )

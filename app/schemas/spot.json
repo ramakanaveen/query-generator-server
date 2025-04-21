@@ -72,7 +72,7 @@
             "examples": [
               {
                 "natural_language": "Show me the top 5 AAPL trades by size today",
-                "query": "xdesc `size select top 5 from trades where date=.z.d, sym=`AAPL"
+                "query": "5#`size xdesc select from trades where date=.z.d, sym=`AAPL"
               },
               {
                 "natural_language": "What was the average price of MSFT trades yesterday?",
@@ -84,7 +84,7 @@
               },
               {
                 "natural_language": "Show me the largest trades today",
-                "query": "xdesc `size select from trades where date=.z.d "
+                "query": "1#`size xdesc  select from trades where date=.z.d "
               }
             ]
           }

@@ -8,6 +8,7 @@ from datetime import datetime
 
 from app.core.db import db_pool
 from app.core.logging import logger
+from app.services.ai_description_service import AISchemaService
 from app.services.embedding_provider import EmbeddingProvider
 from app.services.llm_provider import LLMProvider
 from app.services.schema_editor import SchemaEditorService
@@ -17,6 +18,7 @@ router = APIRouter(prefix="/schema-manager", tags=["schema-manager"])
 # Initialize services
 embedding_provider = EmbeddingProvider()
 schema_editor = SchemaEditorService()
+ai_schema_service = AISchemaService()
 
 @router.get("/groups")
 async def list_schema_groups():
@@ -881,6 +883,7 @@ async def generate_descriptions(
         # Extract fields
         column_name = data.get("column_name")
         table_name = data.get("table_name")
+        schema_name = data.get("schema_name")
         table_context = data.get("table_context")
         count = data.get("count", 3)  # Number of suggestions to generate
 
@@ -890,169 +893,30 @@ async def generate_descriptions(
                 detail="Either column_name or table_name is required"
             )
 
-        # Get LLM provider
-        llm_provider = LLMProvider()
-        llm = llm_provider.get_model("gemini")  # Use gemini model
-
-        # Generate descriptions
-        if column_name:
-            prompt = f"""
-            Generate {count} concise but informative descriptions for a database column named "{column_name}" in a table named "{table_name}".
-            
-            Context about the table:
-            {table_context or "No additional context provided."}
-            
-            Each description should:
-            - Be 1-2 sentences long
-            - Clearly explain what the column represents
-            - Include likely data type and format information
-            - Be suitable for technical documentation
-            
-            Format your response as a JSON array of strings with just the descriptions.
-            """
-        else:
-            prompt = f"""
-            Generate {count} concise but informative descriptions for a database table named "{table_name}".
-            
-            Context:
-            {table_context or "No additional context provided."}
-            
-            Each description should:
-            - Be 1-2 sentences long
-            - Clearly explain what the table contains and its purpose
-            - Be suitable for technical documentation
-            
-            Format your response as a JSON array of strings with just the descriptions.
-            """
-
-        response = await llm.ainvoke(prompt)
-        response_text = response.content.strip()
-
-        # Extract JSON array from response
-        try:
-            # Try to extract JSON array if wrapped in text
-            import re
-            json_match = re.search(r'\[(.*)\]', response_text, re.DOTALL)
-            if json_match:
-                json_str = f"[{json_match.group(1)}]"
-                descriptions = json.loads(json_str)
-            else:
-                descriptions = json.loads(response_text)
-        except (json.JSONDecodeError, AttributeError):
-            # If not valid JSON, try to split by lines
-            descriptions = [line.strip() for line in response_text.split('\n') if line.strip()]
-
-            # Remove any leading numbers (in case of formatted lists)
-            descriptions = [re.sub(r'^\d+\.\s*', '', desc) for desc in descriptions]
-
-            # Remove quotes if present
-            descriptions = [re.sub(r'^["\'](.*)["\']$', r'\1', desc) for desc in descriptions]
-
-        # Ensure we have a list
-        if not isinstance(descriptions, list):
-            descriptions = [descriptions]
-
-        # Limit to requested count
-        descriptions = descriptions[:count]
+        # Generate descriptions using the service
+        descriptions = await ai_schema_service.generate_descriptions(
+            column_name=column_name,
+            table_name=table_name,
+            schema_name=schema_name,
+            table_context=table_context,
+            count=count
+        )
 
         return {"descriptions": descriptions}
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error generating descriptions: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error generating descriptions: {str(e)}")
 
-@router.post("/ai/describe")
-async def generate_descriptions(
-        data: Dict[str, Any] = Body(...)
-):
-    """Generate descriptions for tables or columns using AI."""
-    try:
-        # Extract fields
-        column_name = data.get("column_name")
-        table_name = data.get("table_name")
-        table_context = data.get("table_context")
-        count = data.get("count", 3)  # Number of suggestions to generate
-
-        if not column_name and not table_name:
-            raise HTTPException(
-                status_code=400,
-                detail="Either column_name or table_name is required"
-            )
-
-        # Get LLM provider
-        llm_provider = LLMProvider()
-        llm = llm_provider.get_model("gemini")  # Use gemini model
-
-        # Generate descriptions
-        if column_name:
-            prompt = f"""
-            Generate {count} concise but informative descriptions for a database column named "{column_name}" in a table named "{table_name}".
-            
-            Context about the table:
-            {table_context or "No additional context provided."}
-            
-            Each description should:
-            - Be 1-2 sentences long
-            - Clearly explain what the column represents
-            - Include likely data type and format information
-            - Be suitable for technical documentation
-            
-            Format your response as a JSON array of strings with just the descriptions.
-            """
-        else:
-            prompt = f"""
-            Generate {count} concise but informative descriptions for a database table named "{table_name}".
-            
-            Context:
-            {table_context or "No additional context provided."}
-            
-            Each description should:
-            - Be 1-2 sentences long
-            - Clearly explain what the table contains and its purpose
-            - Be suitable for technical documentation
-            
-            Format your response as a JSON array of strings with just the descriptions.
-            """
-
-        from langchain.prompts import ChatPromptTemplate
-        prompt_template = ChatPromptTemplate.from_template(prompt)
-        chain = prompt_template | llm
-        response = await chain.ainvoke({})
-        response_text = response.content.strip()
-
-        # Extract JSON array from response
+        # Provide fallback descriptions if possible
         try:
-            # Try to extract JSON array if wrapped in text
-            import re
-            json_match = re.search(r'\[(.*)\]', response_text, re.DOTALL)
-            if json_match:
-                json_str = f"[{json_match.group(1)}]"
-                descriptions = json.loads(json_str)
-            else:
-                descriptions = json.loads(response_text)
-        except (json.JSONDecodeError, AttributeError):
-            # If not valid JSON, try to split by lines
-            descriptions = [line.strip() for line in response_text.split('\n') if line.strip()]
+            if column_name and table_name:
+                fallback_descriptions = ai_schema_service.generate_fallback_descriptions(column_name, table_name)
+                if fallback_descriptions:
+                    return {"descriptions": fallback_descriptions[:count]}
+        except:
+            pass
 
-            # Remove any leading numbers (in case of formatted lists)
-            descriptions = [re.sub(r'^\d+\.\s*', '', desc) for desc in descriptions]
-
-            # Remove quotes if present
-            descriptions = [re.sub(r'^["\'](.*)["\']$', r'\1', desc) for desc in descriptions]
-
-        # Ensure we have a list
-        if not isinstance(descriptions, list):
-            descriptions = [descriptions]
-
-        # Limit to requested count
-        descriptions = descriptions[:count]
-
-        return {"descriptions": descriptions}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error generating descriptions: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error generating descriptions: {str(e)}")
 
 @router.post("/ai/examples")
@@ -1072,87 +936,12 @@ async def generate_examples(
                 detail="Table name and schema are required"
             )
 
-        # Get LLM provider
-        llm_provider = LLMProvider()
-        llm = llm_provider.get_model("claude")  # Use Claude model for code generation
-
-        # Create detailed prompt
-        columns_text = ""
-        if "columns" in table_schema:
-            for column in table_schema["columns"]:
-                name = column.get("name", "unknown")
-                col_type = column.get("type", column.get("kdb_type", "unknown"))
-                desc = column.get("description", column.get("column_desc", ""))
-                columns_text += f"- {name} ({col_type}): {desc}\n"
-
-        prompt = f"""
-        Generate {count} example queries for a KDB/q database table named "{table_name}" with the following schema:
-
-        Table: {table_name}
-        Description: {table_schema.get('description', 'No description provided')}
-        
-        Columns:
-        {columns_text}
-        
-        For each example, provide:
-        1. A natural language description of what the query does
-        2. The corresponding KDB/q query
-
-        Important KDB/q Syntax Notes:
-        - For symbols, use backtick notation: `AAPL
-        - For date filtering, use .z.d for today
-        - Tables are referenced directly: select from {table_name}
-        - For ordering: `column xdesc or xasc select ... from ...
-        
-        Format your response as a JSON array, where each item contains:
-        {{
-            "natural_language": "Description of the query",
-            "query": "The KDB/q query code"
-        }}
-        """
-
-        from langchain.prompts import ChatPromptTemplate
-        prompt_template = ChatPromptTemplate.from_template(prompt)
-        chain = prompt_template | llm
-        response = await chain.ainvoke({})
-        response_text = response.content.strip()
-
-        # Extract JSON array from response
-        try:
-            # Try to extract JSON array if wrapped in text
-            import re
-            json_match = re.search(r'\[.*\]', response_text, re.DOTALL)
-            if json_match:
-                examples = json.loads(json_match.group(0))
-            else:
-                examples = json.loads(response_text)
-        except (json.JSONDecodeError, AttributeError):
-            # If we can't parse as JSON, try manual extraction
-            # This is a fallback in case the LLM doesn't return valid JSON
-            examples = []
-
-            # Look for patterns like "Natural Language:" followed by "Query:"
-            nl_query_pairs = re.findall(
-                r'(?:Natural Language|Description):\s*(.*?)(?:\n|$).*?(?:Query|KDB/q query):\s*(.*?)(?:\n\n|\Z)',
-                response_text,
-                re.DOTALL
-            )
-
-            for nl, query in nl_query_pairs:
-                # Clean up the query (remove ```q and ``` if present)
-                clean_query = re.sub(r'```q?\n(.*?)\n```', r'\1', query.strip(), flags=re.DOTALL)
-
-                examples.append({
-                    "natural_language": nl.strip(),
-                    "query": clean_query.strip()
-                })
-
-        # Ensure we have a list
-        if not isinstance(examples, list):
-            examples = [examples]
-
-        # Limit to requested count
-        examples = examples[:count]
+        # Generate examples using the service
+        examples = await ai_schema_service.generate_examples(
+            table_name=table_name,
+            table_schema=table_schema,
+            count=count
+        )
 
         return {"examples": examples}
     except HTTPException:
