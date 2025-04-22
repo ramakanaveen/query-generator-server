@@ -50,6 +50,9 @@ REFINED_PROMPT_TEMPLATE = """
             Previous query had these issues:
             {original_errors}
             
+            Detailed validation feedback:
+            {detailed_feedback}
+            
             Guidance for improvement:
             {refinement_guidance}
             
