@@ -10,8 +10,6 @@ from app.core.profiling import timeit
 KDB_VALIDATION_PROMPT = """
 You are an expert KDB+/q validator analyzing a generated query. Your goal is to provide detailed feedback to help improve the query.
 
-Original User Query: {query}
-Generated KDB Query: {generated_query}
 Database Schema:
 {schema}
 
@@ -35,6 +33,10 @@ Provide a JSON-formatted response with these fields:
 - logical_issues: [] (problems with query logic that would return incorrect results)
 - improvement_suggestions: [] (ideas for better implementations)
 - corrected_query: (optional improved version if available)
+
+Based on the above information provide detailed feedback to help improve the query
+Original User Query: {query}
+Generated KDB Query: {generated_query}
 
 Be specific with line numbers, error locations, and suggest corrections.
 """

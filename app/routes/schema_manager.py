@@ -4,6 +4,10 @@ from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, B
 from typing import Optional, List, Dict, Any
 import json
 import uuid
+import csv
+import io
+import pandas as pd
+import re
 from datetime import datetime
 
 from app.core.db import db_pool
@@ -19,6 +23,7 @@ router = APIRouter(prefix="/schema-manager", tags=["schema-manager"])
 embedding_provider = EmbeddingProvider()
 schema_editor = SchemaEditorService()
 ai_schema_service = AISchemaService()
+llm_provider = LLMProvider()
 
 @router.get("/groups")
 async def list_schema_groups():
@@ -949,3 +954,483 @@ async def generate_examples(
     except Exception as e:
         logger.error(f"Error generating examples: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error generating examples: {str(e)}")
+
+@router.post("/ai/generate-schema")
+async def generate_table_schema(
+        data: Dict[str, Any] = Body(...)
+):
+    """Generate table schema from CSV or JSON content."""
+    try:
+        # Extract fields
+        table_name = data.get("tableName")
+        description = data.get("description", "")
+        content = data.get("content")
+        content_type = data.get("contentType", "csv")  # 'csv' or 'json'
+
+        if not table_name or not content:
+            raise HTTPException(status_code=400, detail="Table name and content are required")
+
+        # Process content based on type
+        if content_type == "csv":
+            # Parse CSV content
+            return await parse_csv_schema(table_name, description, content)
+        elif content_type == "json":
+            # Parse JSON content
+            return await parse_json_schema(table_name, description, content)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported content type: {content_type}")
+
+    except Exception as e:
+        logger.error(f"Error generating table schema: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error generating table schema: {str(e)}")
+
+async def parse_csv_schema(table_name: str, description: str, content: str):
+    """Parse CSV content and generate schema using AI."""
+    try:
+        # Read CSV into pandas
+        df = pd.read_csv(io.StringIO(content), nrows=10)  # Only need a few rows for schema detection
+
+        # Get column information
+        column_info = []
+        for col in df.columns:
+            # Get sample values
+            non_null_values = df[col].dropna().head(5).tolist()
+            sample_values = [str(val) for val in non_null_values]
+
+            column_info.append({
+                "name": col,
+                "sample_values": sample_values,
+                "dtype": str(df[col].dtype)
+            })
+
+        # Prepare prompt for LLM
+        prompt = f"""
+        Analyze this CSV table data and generate a database schema:
+        
+        Table Name: {table_name}
+        Table Description: {description}
+        
+        Sample data columns:
+        {column_info}
+        
+        For each column, determine:
+        1. The appropriate KDB+ data type (symbol, char, string, boolean, byte, short, int, long, real, float, time, minute, second, timestamp, month, date, datetime, timespan)
+        2. A descriptive name (lowercase with underscores)
+        3. A short but informative description
+        4. Whether it should be a key column (pick the most likely primary key)
+        5. Whether it should be a required column (usually true for key columns)
+        
+        Provide the schema in JSON format with this structure:
+        {{
+            "columns": [
+                {{
+                    "name": "column_name",
+                    "type": "kdb_type",
+                    "description": "Short description",
+                    "required": true/false,
+                    "key": true/false
+                }}
+            ]
+        }}
+        
+        Return ONLY valid JSON without any explanations.
+        """
+
+        # Get response from LLM
+        response = await llm_provider.get_completion(prompt)
+
+        # Parse JSON from response
+        try:
+            # Find JSON content in the response
+            import re
+            import json
+
+            # Look for JSON content
+            json_match = re.search(r'(\{.*\})', response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+                schema = json.loads(json_str)
+            else:
+                # If no JSON found, try to parse the entire response
+                schema = json.loads(response)
+
+            # Validate schema structure
+            if "columns" not in schema or not isinstance(schema["columns"], list):
+                raise ValueError("Invalid schema structure: missing 'columns' array")
+
+            return schema
+
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error(f"Failed to parse LLM response: {str(e)}")
+            logger.error(f"LLM response: {response}")
+
+            # Fallback: Generate basic schema from DataFrame
+            return generate_fallback_schema(table_name, description, df)
+
+    except Exception as e:
+        logger.error(f"Error parsing CSV: {str(e)}", exc_info=True)
+        # Use fallback method
+        return generate_fallback_schema_from_str(table_name, description, content)
+
+async def parse_json_schema(table_name: str, description: str, content: str):
+    """Parse JSON content and generate schema using AI."""
+    try:
+        # Parse JSON content
+        import json
+        json_data = json.loads(content)
+
+        # Check if it's an array of objects
+        if not isinstance(json_data, list) or len(json_data) == 0 or not isinstance(json_data[0], dict):
+            sample_obj = json_data
+            is_array = False
+        else:
+            sample_obj = json_data[0]  # Take first object as sample
+            is_array = True
+
+        # Prepare column information
+        column_info = []
+        for key, value in sample_obj.items():
+            column_info.append({
+                "name": key,
+                "sample_value": str(value),
+                "type": type(value).__name__
+            })
+
+        # Prepare prompt for LLM
+        prompt = f"""
+        Analyze this JSON data and generate a database schema:
+        
+        Table Name: {table_name}
+        Table Description: {description}
+        Data Structure: {"Array of objects" if is_array else "Single object"}
+        
+        Sample data fields:
+        {column_info}
+        
+        For each field, determine:
+        1. The appropriate KDB+ data type (symbol, char, string, boolean, byte, short, int, long, real, float, time, minute, second, timestamp, month, date, datetime, timespan)
+        2. A descriptive name (lowercase with underscores)
+        3. A short but informative description
+        4. Whether it should be a key column (pick the most likely primary key)
+        5. Whether it should be a required column (usually true for key columns)
+        
+        Provide the schema in JSON format with this structure:
+        {{
+            "columns": [
+                {{
+                    "name": "column_name",
+                    "type": "kdb_type",
+                    "description": "Short description",
+                    "required": true/false,
+                    "key": true/false
+                }}
+            ]
+        }}
+        
+        Return ONLY valid JSON without any explanations.
+        """
+
+        # Get response from LLM
+        response = await llm_provider.get_completion(prompt)
+
+        # Parse JSON from response
+        try:
+            # Find JSON content in the response
+            import re
+
+            # Look for JSON content
+            json_match = re.search(r'(\{.*\})', response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+                schema = json.loads(json_str)
+            else:
+                # If no JSON found, try to parse the entire response
+                schema = json.loads(response)
+
+            # Validate schema structure
+            if "columns" not in schema or not isinstance(schema["columns"], list):
+                raise ValueError("Invalid schema structure: missing 'columns' array")
+
+            return schema
+
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error(f"Failed to parse LLM response: {str(e)}")
+            logger.error(f"LLM response: {response}")
+
+            # Fallback: Generate basic schema from JSON
+            return generate_fallback_schema_from_json(table_name, description, json_data)
+
+    except Exception as e:
+        logger.error(f"Error parsing JSON: {str(e)}", exc_info=True)
+        # Use fallback method
+        return generate_fallback_schema_from_str(table_name, description, content)
+
+def generate_fallback_schema_from_str(table_name: str, description: str, content: str):
+    """Generate a basic schema from CSV string when AI fails."""
+    try:
+        # Try to parse as CSV
+        csv_reader = csv.reader(io.StringIO(content))
+        headers = next(csv_reader)
+        data_row = next(csv_reader, [])
+
+        columns = []
+        for i, header in enumerate(headers):
+            # Clean column name
+            clean_name = header.strip().lower().replace(' ', '_').replace('-', '_')
+            clean_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in clean_name)
+
+            # Get sample value
+            sample = data_row[i].strip() if i < len(data_row) else ""
+
+            # Infer type
+            col_type = infer_kdb_type(sample)
+
+            columns.append({
+                "name": clean_name,
+                "type": col_type,
+                "description": f"Column for {header}",
+                "required": i == 0,  # First column is required by default
+                "key": i == 0  # First column is key by default
+            })
+
+        return {
+            "columns": columns
+        }
+
+    except Exception as e:
+        logger.error(f"Fallback schema generation failed: {str(e)}", exc_info=True)
+
+        # Return minimal schema as last resort
+        return {
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "symbol",
+                    "description": "Primary key",
+                    "required": True,
+                    "key": True
+                },
+                {
+                    "name": "value",
+                    "type": "symbol",
+                    "description": "Data value",
+                    "required": False,
+                    "key": False
+                }
+            ]
+        }
+
+def generate_fallback_schema_from_json(table_name: str, description: str, json_data):
+    """Generate a basic schema from JSON data when AI fails."""
+    try:
+        # Determine if it's an array of objects
+        if isinstance(json_data, list) and len(json_data) > 0 and isinstance(json_data[0], dict):
+            sample_obj = json_data[0]
+        elif isinstance(json_data, dict):
+            sample_obj = json_data
+        else:
+            # Can't determine schema, return minimal
+            return {
+                "columns": [
+                    {
+                        "name": "id",
+                        "type": "symbol",
+                        "description": "Primary key",
+                        "required": True,
+                        "key": True
+                    },
+                    {
+                        "name": "value",
+                        "type": "symbol",
+                        "description": "Data value",
+                        "required": False,
+                        "key": False
+                    }
+                ]
+            }
+
+        columns = []
+        for i, (key, value) in enumerate(sample_obj.items()):
+            # Clean column name
+            clean_name = key.strip().lower().replace(' ', '_').replace('-', '_')
+            clean_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in clean_name)
+
+            # Infer type
+            col_type = infer_kdb_type_from_json(value)
+
+            columns.append({
+                "name": clean_name,
+                "type": col_type,
+                "description": f"Column for {key}",
+                "required": key.lower() == "id" or i == 0,  # ID or first column is required
+                "key": key.lower() == "id" or i == 0  # ID or first column is key
+            })
+
+        return {
+            "columns": columns
+        }
+
+    except Exception as e:
+        logger.error(f"Fallback JSON schema generation failed: {str(e)}", exc_info=True)
+
+        # Return minimal schema as last resort
+        return {
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "symbol",
+                    "description": "Primary key",
+                    "required": True,
+                    "key": True
+                },
+                {
+                    "name": "value",
+                    "type": "symbol",
+                    "description": "Data value",
+                    "required": False,
+                    "key": False
+                }
+            ]
+        }
+
+def generate_fallback_schema(table_name: str, description: str, df):
+    """Generate a basic schema from pandas DataFrame when AI fails."""
+    columns = []
+
+    # Find a good key column (id, name, etc.)
+    key_column_candidates = ['id', 'ID', 'key', 'KEY', 'name', 'NAME', 'code', 'CODE']
+    key_column = None
+
+    for candidate in key_column_candidates:
+        if candidate in df.columns:
+            key_column = candidate
+            break
+
+    # If no key found, use first column
+    if key_column is None and len(df.columns) > 0:
+        key_column = df.columns[0]
+
+    # Build schema
+    for i, col in enumerate(df.columns):
+        # Clean column name
+        clean_name = col.strip().lower().replace(' ', '_').replace('-', '_')
+        clean_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in clean_name)
+
+        # Infer type from pandas dtype
+        col_type = infer_kdb_type_from_pandas(df[col].dtype)
+
+        # Determine if this is a key column
+        is_key = col == key_column
+
+        columns.append({
+            "name": clean_name,
+            "type": col_type,
+            "description": f"Column for {col}",
+            "required": is_key,
+            "key": is_key
+        })
+
+    return {
+        "columns": columns
+    }
+
+def infer_kdb_type(value):
+    """Infer KDB type from a string value."""
+    if not value:
+        return "symbol"
+
+    # Check if value is a number
+    try:
+        float_value = float(value)
+        if float_value.is_integer():
+            if -32768 <= float_value <= 32767:
+                return "short"
+            elif -2147483648 <= float_value <= 2147483647:
+                return "int"
+            else:
+                return "long"
+        else:
+            return "float"
+    except ValueError:
+        pass
+
+    # Check if value is a boolean
+    if value.lower() in ["true", "false", "yes", "no", "y", "n", "t", "f"]:
+        return "boolean"
+
+    # Check if value is a date
+    import re
+    date_pattern = re.compile(r'^\d{1,4}[-/]\d{1,2}[-/]\d{1,4}$')
+    if date_pattern.match(value):
+        return "date"
+
+    # Check if value is a timestamp
+    timestamp_pattern = re.compile(r'^\d{1,4}[-/]\d{1,2}[-/]\d{1,4}\s\d{1,2}:\d{1,2}(:\d{1,2})?$')
+    if timestamp_pattern.match(value):
+        return "timestamp"
+
+    # Default to symbol
+    return "symbol"
+
+def infer_kdb_type_from_json(value):
+    """Infer KDB type from a JSON value."""
+    if value is None:
+        return "symbol"
+
+    if isinstance(value, bool):
+        return "boolean"
+
+    if isinstance(value, int):
+        if -32768 <= value <= 32767:
+            return "short"
+        elif -2147483648 <= value <= 2147483647:
+            return "int"
+        else:
+            return "long"
+
+    if isinstance(value, float):
+        return "float"
+
+    if isinstance(value, str):
+        # Check if it's a date or timestamp
+        import re
+        date_pattern = re.compile(r'^\d{1,4}[-/]\d{1,2}[-/]\d{1,4}$')
+        if date_pattern.match(value):
+            return "date"
+
+        timestamp_pattern = re.compile(r'^\d{1,4}[-/]\d{1,2}[-/]\d{1,4}\s\d{1,2}:\d{1,2}(:\d{1,2})?$')
+        if timestamp_pattern.match(value):
+            return "timestamp"
+
+    # Default to symbol for strings and other types
+    return "symbol"
+
+def infer_kdb_type_from_pandas(dtype):
+    """Infer KDB type from pandas dtype."""
+    dtype_str = str(dtype).lower()
+
+    if 'int' in dtype_str:
+        if '8' in dtype_str or '16' in dtype_str:
+            return "short"
+        elif '32' in dtype_str:
+            return "int"
+        else:
+            return "long"
+
+    if 'float' in dtype_str:
+        return "float"
+
+    if 'bool' in dtype_str:
+        return "boolean"
+
+    if 'datetime' in dtype_str:
+        return "timestamp"
+
+    if 'date' in dtype_str:
+        return "date"
+
+    if 'time' in dtype_str:
+        return "time"
+
+    # Default to symbol for object and other types
+    return "symbol"
