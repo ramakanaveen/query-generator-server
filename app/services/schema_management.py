@@ -9,6 +9,7 @@ from pathlib import Path
 from app.core.config import settings
 from app.core.logging import logger
 from app.services.embedding_provider import EmbeddingProvider
+from app.core.db import db_pool
 
 class SchemaManager:
     """
@@ -18,11 +19,11 @@ class SchemaManager:
     
     def __init__(self):
         self.embedding_provider = EmbeddingProvider()
-        self.db_url = settings.DATABASE_URL
+        # self.db_url = settings.DATABASE_URL
     
     async def _get_db_connection(self):
-        """Get a database connection."""
-        return await asyncpg.connect(self.db_url)
+        """Get a database connection from the pool."""
+        return await db_pool.get_connection()
     
     async def create_schema_group(self, name: str, description: Optional[str] = None) -> Optional[int]:
         """
@@ -795,7 +796,7 @@ class SchemaManager:
                     # Create schema version
                     version_id = await self.create_schema_version(
                         schema_id=schema_id,
-                        version=1,
+                        # version=1,
                         created_by=user_id,
                         notes=f"Initial import from {os.path.basename(file_path)}"
                     )

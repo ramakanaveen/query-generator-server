@@ -1,3 +1,4 @@
+import time
 from functools import lru_cache
 import math
 import asyncio
@@ -54,6 +55,7 @@ async def generate_query(request: QueryRequest):
     """
     Generate a database query or other content from natural language.
     """
+    start_time = time.time()
     try:
         # Extract values from validated request model
         query = request.query
@@ -92,7 +94,8 @@ async def generate_query(request: QueryRequest):
             # Legacy format (string query)
             generated_query = result
             response_type = "query"
-        
+        total_time = time.time() - start_time
+        logger.info(f"⏱️ Total query generation time: {total_time:.4f} seconds")
         return QueryResponse(
             generated_query=generated_query,
             generated_content=generated_content,
@@ -114,6 +117,7 @@ async def execute_query(
     request: ExecutionRequest,
     db_connector: DatabaseConnector = Depends(get_database_connector)
 ):
+    start_time = time.time()
     try:
         # Extract values from the request
         query = request.query
@@ -140,7 +144,8 @@ async def execute_query(
         start_index = page * page_size
         end_index = start_index + page_size
         paginated_results = results[start_index:end_index]
-        
+        total_time = time.time() - start_time
+        logger.info(f"⏱️ Total query generation time: {total_time:.4f} seconds")
         return ExecutionResponse(
             results=paginated_results,
             metadata=metadata,

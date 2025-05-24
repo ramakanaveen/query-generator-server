@@ -15,16 +15,21 @@ Examples of similar queries:
 
 {conversation_context}
 
+IMPORTANT NOTES FOR FOLLOW-UP QUERIES:
+- If the current query appears to be a follow-up (like "change X to Y" or "show for Z instead"), 
+  look at the previous query and reuse its structure.
+- Only modify the parts mentioned in the follow-up (filters, symbols, dates, etc).
+- Ensure the modified query is complete and executable.
+
 IMPORTANT NOTES FOR KDB/Q QUERIES:
 - KDB/Q does not use "ORDER BY". Instead, use:
-  - For sorting within select: `select ... by col desc` or `select ... by col asc`
-  - For sorting after selection: `select ... | xdesc `column` or `select ... | xasc `column`
+  - For sorting within select: `column xdesc or xasc select ... from ... where ...
 - For date comparisons, use .z.d for today's date
 - For symbols, prefix with backtick (`): `AAPL
-- Top N queries use: `select[N] ...` or `select top N ...`
+- Top N queries use: `-N#select ...` or `N#select ...`
 - Common time operations: .z.d (today), .z.d-1 (yesterday), .z.d-7 (a week ago)
 
-Conversation Context Tips:
+Conversation Context Tips( use in FOLLOW-UP QUERIES AS WELL):
 - Use the previous conversation to understand the context of the current query
 - If the user is asking a follow-up question, maintain the context from previous queries
 - If the user mentions "top N", ensure you update the number compared to previous queries
@@ -44,6 +49,9 @@ REFINED_PROMPT_TEMPLATE = """
             
             Previous query had these issues:
             {original_errors}
+            
+            Detailed validation feedback:
+            {detailed_feedback}
             
             Guidance for improvement:
             {refinement_guidance}

@@ -2,10 +2,13 @@
 import re
 from typing import Dict, Any, List
 from langchain.prompts import ChatPromptTemplate
+
+from app.core.profiling import timeit
 from app.services.query_generation.prompts.anlyzer_prompts import ANALYZER_PROMPT_TEMPLATE
 from app.services.query_generation.prompts.intent_classifier_prompts import INTENT_CLASSIFIER_PROMPT_TEMPLATE
 from app.core.logging import logger
 
+@timeit
 async def analyze_query(state):
     """
     Analyze the natural language query to extract directives, entities, intent, and intent type.

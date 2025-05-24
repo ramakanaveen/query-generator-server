@@ -38,7 +38,9 @@ class QueryGenerationState(BaseModel):
     refinement_guidance: Optional[str] = Field(default=None, description="Guidance for query refinement")
     refinement_count: int = Field(default=0, description="Number of refinement attempts")
     max_refinements: int = Field(default=2, description="Maximum number of refinement attempts")
-
+    llm_corrected_query: Optional[str] = Field(default=None, description="Corrected query from LLM")
+    detailed_feedback: Optional[str] = Field(default=None, description="Detailed feedback from the query")
+    validation_details: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Validation details")
 class QueryGenerator:
     """
     Service for generating database queries from natural language using LangGraph.
