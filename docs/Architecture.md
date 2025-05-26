@@ -168,15 +168,15 @@ The system uses specialized prompts for each stage of the pipeline:
 1. **Analyzer Prompt** (`app/services/query_generation/prompts/analyzer_prompts.py`):
    - Extracts entities and intent from the natural language query
 
-2. **Generator Prompt** (`app/services/query_generation/prompts/generator_prompts.py`):
+2. **Generator Prompt** (`app/services/query_generation/prompts/generator_prompts.py` - see `GENERATOR_PROMPT_TEMPLATE`):
    - Converts the analyzed query into a database query using schema information
    - Includes database-specific syntax guidelines and examples
 
-3. **Refiner Prompt** (`app/services/query_generation/prompts/refiner_prompts.py`):
-   - Provides guidance for improving queries that fail validation
+3. **Refiner Node Prompt** (`app/services/query_generation/prompts/refiner_prompts.py` - see `ENHANCED_REFINER_PROMPT_TEMPLATE`):
+   - Takes a query with validation errors, along with schema and feedback, and produces a corrected query. This output is then used as "refinement guidance" by the next step.
 
-4. **Refined Generator Prompt** (`app/services/query_generation/prompts/generator_prompts.py`):
-   - Used to generate improved queries based on refinement guidance
+4. **Refined Generator Prompt** (`app/services/query_generation/prompts/generator_prompts.py` - see `REFINED_PROMPT_TEMPLATE`):
+   - Used to generate a further improved query based on the "refinement guidance" (the corrected query from the Refiner Node) and the original validation feedback.
 
 ## WebSocket Flow
 

@@ -21,6 +21,7 @@ async def refine_query(state):
     try:
         generated_query = state.generated_query
         original_query = state.query
+        schema = state.query_schema
         validation_errors = state.validation_errors
         detailed_feedback = state.detailed_feedback if hasattr(state, 'detailed_feedback') else []
         database_type = state.database_type
@@ -54,7 +55,8 @@ async def refine_query(state):
             "generated_query": generated_query,
             "detailed_feedback": formatted_feedback,
             "database_type": database_type,
-            "llm_correction_guidance": llm_correction_guidance
+            "llm_correction_guidance": llm_correction_guidance,
+            "schema": schema
         }
 
         # Get the response from the LLM

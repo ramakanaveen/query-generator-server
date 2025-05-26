@@ -332,9 +332,13 @@ To modify the vector search parameters:
 The system uses different prompts for each stage of the pipeline:
 
 1. **Analyzer Prompt**: Extracts entities and intent from natural language
+   - Path: `app/services/query_generation/prompts/analyzer_prompts.py`
 2. **Generator Prompt**: Generates database queries
-3. **Refiner Prompt**: Provides guidance for queries that fail validation
-4. **Refined Generator Prompt**: Generates improved queries based on guidance
+   - Path: `app/services/query_generation/prompts/generator_prompts.py` (see `GENERATOR_PROMPT_TEMPLATE`)
+3. **Refiner Node Prompt**: Takes a validated query with errors and produces a corrected query. This corrected query is then used as "refinement guidance" for the Refined Generator step.
+   - Path: `app/services/query_generation/prompts/refiner_prompts.py` (see `ENHANCED_REFINER_PROMPT_TEMPLATE`)
+4. **Refined Generator Prompt**: Generates improved queries based on the "refinement guidance" (the corrected query from the refiner node) and original error feedback.
+   - Path: `app/services/query_generation/prompts/generator_prompts.py` (see `REFINED_PROMPT_TEMPLATE`)
 
 When updating prompts:
 - Test the prompt with different inputs

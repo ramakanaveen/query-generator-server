@@ -141,6 +141,7 @@ async def generate_query(state):
                 "database_type": database_type,
                 "original_errors": state.original_errors,
                 "refinement_guidance": state.refinement_guidance,
+                "original_query": state.original_query,
                 # Add detailed feedback if available
                 "detailed_feedback": "\n".join(state.detailed_feedback) if hasattr(state, 'detailed_feedback') else ""
             }
