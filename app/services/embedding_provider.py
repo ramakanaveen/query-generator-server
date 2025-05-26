@@ -33,7 +33,7 @@ class EmbeddingProvider:
         self._embeddings = VertexAIEmbeddings(
             model_name=settings.GOOGLE_EMBEDDING_MODEL_NAME,
             project=settings.GOOGLE_PROJECT_ID,
-            location=settings.GOOGLE_LOCATION,
+            location=settings.GOOGLE_EMBEDDING_LOCATION,
         )
         self._last_cleanup = time.time()
 

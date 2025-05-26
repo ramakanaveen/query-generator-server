@@ -1,14 +1,12 @@
 # app/services/query_generation/nodes/query_validator.py
 import re
-from typing import Dict, Any, List, Tuple
+from typing import List, Dict, Any
+
 from langchain.prompts import ChatPromptTemplate
 
 from app.core.logging import logger
 from app.core.profiling import timeit
 from app.services.query_generation.prompts.validation_prompts import KDB_VALIDATION_PROMPT, SQL_VALIDATION_PROMPT
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
-from langchain_core.output_parsers import PydanticOutputParser
 
 
 class ValidationResult:

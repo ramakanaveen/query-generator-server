@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     GOOGLE_CREDENTIALS_PATH: str = os.getenv("GOOGLE_CREDENTIALS_PATH", "./google-credentials.json")
     GOOGLE_PROJECT_ID: str = os.getenv("GOOGLE_PROJECT_ID", "")
     GOOGLE_LOCATION: str = os.getenv("GOOGLE_LOCATION", "us-central1")
- 
+    GOOGLE_EMBEDDING_LOCATION:str = os.getenv("GOOGLE_EMBEDDING_LOCATION", "us-central1")
     # Google embedding settings
     GOOGLE_EMBEDDING_MODEL_NAME: str = os.getenv("GOOGLE_EMBEDDING_MODEL_NAME", "text-embedding-005")
     GOOGLE_EMBEDDING_ENDPOINT: str = os.getenv("GOOGLE_EMBEDDING_ENDPOINT", "")
