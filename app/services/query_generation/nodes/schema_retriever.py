@@ -233,9 +233,9 @@ async def retrieve_schema(state):
             state.thinking.append(f"Including entities in search: {entity_text}")
         
         # Search for similar tables using vector search
-        relevant_tables = await schema_manager.find_tables_by_vector_search(
-            search_text, 
-            similarity_threshold=0.65,
+        relevant_tables = await multi_threshold_vector_search(
+            schema_manager,
+            search_text,
             max_results=5
         )
         
@@ -304,6 +304,114 @@ async def retrieve_schema(state):
         state.query_schema = None
         state.no_schema_found = True
         return state
+
+async def multi_threshold_vector_search(schema_manager, search_text, max_results=5):
+    """
+    Multi-threshold vector search that tries progressively lower thresholds
+    until it finds results or exhausts all thresholds.
+
+    Args:
+        schema_manager: SchemaManager instance
+        search_text: Text to search for
+        max_results: Maximum number of results to return
+
+    Returns:
+        List of search results with same format as find_tables_by_vector_search
+    """
+    # Progressive thresholds from strict to lenient
+    thresholds = [0.65, 0.59, 0.55, 0.50, 0.45, 0.40]
+
+    for threshold in thresholds:
+        try:
+            logger.debug(f"Trying vector search with threshold {threshold}")
+
+            results = await schema_manager.find_tables_by_vector_search(
+                search_text,
+                similarity_threshold=threshold,
+                max_results=max_results
+            )
+
+            if results:
+                # Found results at this threshold
+                logger.info(f"Vector search found {len(results)} results at threshold {threshold}")
+
+                # Add threshold info to results for debugging
+                for result in results:
+                    result['search_threshold_used'] = threshold
+
+                return results
+
+        except Exception as e:
+            logger.warning(f"Vector search failed at threshold {threshold}: {str(e)}")
+            continue
+
+    # No results found at any threshold
+    logger.info("Multi-threshold vector search found no results at any threshold")
+    return []
+
+# Alternative version with configurable thresholds
+async def multi_threshold_vector_search_configurable(schema_manager, search_text,
+                                                     max_results=5,
+                                                     thresholds=None,
+                                                     min_results=1):
+        """
+        Configurable multi-threshold vector search.
+
+        Args:
+            schema_manager: SchemaManager instance
+            search_text: Text to search for
+            max_results: Maximum number of results to return
+            thresholds: List of thresholds to try (defaults to [0.65, 0.59, 0.55, 0.50, 0.45, 0.40])
+            min_results: Minimum number of results needed before stopping (default: 1)
+
+        Returns:
+            List of search results
+        """
+        if thresholds is None:
+            thresholds = [0.65, 0.59, 0.55, 0.50, 0.45, 0.40]
+
+        best_results = []
+        threshold_used = None
+
+        for threshold in thresholds:
+            try:
+                logger.debug(f"Trying vector search with threshold {threshold}")
+
+                results = await schema_manager.find_tables_by_vector_search(
+                    search_text,
+                    similarity_threshold=threshold,
+                    max_results=max_results
+                )
+
+                if results and len(results) >= min_results:
+                    # Found sufficient results
+                    logger.info(f"Vector search found {len(results)} results at threshold {threshold}")
+
+                    # Add threshold info to results
+                    for result in results:
+                        result['search_threshold_used'] = threshold
+
+                    return results
+                elif results:
+                    # Found some results but not enough, keep trying but save these as backup
+                    if not best_results:
+                        best_results = results
+                        threshold_used = threshold
+
+            except Exception as e:
+                logger.warning(f"Vector search failed at threshold {threshold}: {str(e)}")
+                continue
+
+        # Return best results found, even if less than min_results
+        if best_results:
+            logger.info(f"Returning {len(best_results)} results from threshold {threshold_used}")
+            for result in best_results:
+                result['search_threshold_used'] = threshold_used
+            return best_results
+
+        # No results found at any threshold
+        logger.info("Multi-threshold vector search found no results at any threshold")
+        return []
 
 # Helper function to find tables by name
 async def find_tables_by_name(schema_manager, name):

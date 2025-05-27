@@ -597,7 +597,11 @@ async def get_schema_json(schema_id: int, version_id: Optional[int] = None):
             # Parse JSON
             if raw_json:
                 try:
-                    return json.loads(raw_json)
+                    parsed_json = json.loads(raw_json)
+                    if 'schema_json' in parsed_json:
+                        return parsed_json['schema_json']
+                    else:
+                        return parsed_json
                 except json.JSONDecodeError:
                     logger.error(f"Invalid JSON in schema version {version_id}")
                     # Return empty schema as fallback

@@ -8,6 +8,7 @@ from app.routes import query, conversation, websocket, directives, feedback, sch
 from app.core.config import settings
 from app.routes import schema_management
 from app.core.db import db_pool
+from app.routes import debug_schema
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -40,6 +41,8 @@ app.include_router(directives.router, prefix="/api/v1", tags=["directives"])
 app.include_router(feedback.router, prefix="/api/v1", tags=["feedback"])
 app.include_router(schema_management.router, prefix="/api/v1", tags=["schema"])
 app.include_router(schema_manager.router, prefix="/api/v1", tags=["schema-manager"])
+app.include_router(debug_schema.router, prefix="/api/v1", tags=["debug"])
+
 # Socket.IO setup
 sio = socketio.AsyncServer(
     async_mode="asgi",
