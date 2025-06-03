@@ -13,7 +13,7 @@ from app.services.query_generation.nodes import (
     query_refiner,
     unified_query_analyzer
 )
-from app.core.langfuse_client import langfuse_client # Import your Langfuse client
+from app.core.langfuse_client import langfuse_client
 
 class QueryGenerationState(BaseModel):
     """State for the query generation process."""
@@ -50,6 +50,24 @@ class QueryGenerationState(BaseModel):
     execution_plan: List[str] = Field(default_factory=list, description="Execution plan")
     query_type: str = Field(default="select_basic", description="Query type")
 
+    # NEW: Retry-specific fields
+    is_retry_request: bool = Field(default=False, description="Whether this is a retry request")
+    original_generated_query: Optional[str] = Field(default=None, description="Previously generated query for retry")
+    user_feedback: Optional[str] = Field(default=None, description="User feedback about what was wrong")
+    retry_context: Dict[str, Any] = Field(default_factory=dict, description="Additional retry context")
+
+    # NEW: Conversation essence fields
+    conversation_essence: Dict[str, Any] = Field(default_factory=dict, description="Conversation essence from database")
+    original_intent: Optional[str] = Field(default=None, description="Original user intent from conversation start")
+    feedback_trail: List[Dict[str, Any]] = Field(default_factory=list, description="Trail of feedback and corrections")
+    current_understanding: Optional[str] = Field(default=None, description="Current system understanding of user needs")
+    key_context: List[str] = Field(default_factory=list, description="Key context elements (directives, entities, constraints)")
+
+    # NEW: User context
+    user_id: Optional[str] = Field(default=None, description="User ID for personalized context")
+    conversation_summary: Optional[str] = Field(default=None, description="Current conversation summary")
+
+# Keep the existing QueryGenerator class structure, just with enhanced state
 class QueryGenerator:
     """
     Service for generating database queries from natural language using LangGraph.
@@ -113,153 +131,126 @@ class QueryGenerator:
         
         # Compile the workflow
         return workflow.compile()
-    
-    def _format_conversation_history(self, history: List[Dict[str, Any]]) -> str:
-        """Format conversation history for the LLM prompt."""
-        if not history:
-            return ""
-            
-        formatted = "Previous conversation:\n"
-        for msg in history:
-            role = msg.get("role", "unknown")
-            content = msg.get("content", "")
-            if role == "user":
-                formatted += f"User: {content}\n"
-            elif role == "assistant":
-                formatted += f"Assistant generated this query: {content}\n"
-        return formatted
-    
+
+    # Enhanced generate method to handle conversation essence
     async def generate(
-    self, 
-    query: str, 
-    database_type: str = "kdb", 
-    conversation_id: Optional[str] = None,
-    conversation_history: Optional[List[Dict[str, Any]]] = None
-) -> Tuple[Union[str, Dict[str, Any]], List[str]]:
+            self,
+            query: str,
+            database_type: str = "kdb",
+            conversation_id: Optional[str] = None,
+            conversation_history: Optional[List[Dict[str, Any]]] = None,
+            user_id: Optional[str] = None,
+            # NEW: Retry-specific parameters
+            is_retry: bool = False,
+            original_generated_query: Optional[str] = None,
+            user_feedback: Optional[str] = None
+    ) -> Tuple[Union[str, Dict[str, Any]], List[str]]:
         """
         Generate a database query or other content from natural language.
-        
-        Args:
-            query: The natural language query
-            database_type: Type of database (kdb, sql, etc.)
-            conversation_id: Optional conversation ID for context
-            conversation_history: Optional conversation history for context
-            
-        Returns:
-            Tuple of (generated_result, thinking_steps) where generated_result can be:
-            - A string (for backward compatibility with query generation)
-            - A dict with intent_type, generated_query, and/or generated_content
+        Enhanced with conversation essence and retry support.
         """
         try:
-            # Initialize the state
+            # Initialize the enhanced state
             initial_state = QueryGenerationState(
                 query=query,
                 llm=self.llm,
                 database_type=database_type,
                 conversation_id=conversation_id,
-                conversation_history=conversation_history or []
+                conversation_history=conversation_history or [],
+                user_id=user_id,
+
+                # NEW: Retry fields
+                is_retry_request=is_retry,
+                original_generated_query=original_generated_query,
+                user_feedback=user_feedback
             )
-            
-            # Add a thinking step for initialization
-            initial_state.thinking.append(f"Received query: {query}")
+
+            # Add thinking steps
+            initial_state.thinking.append(f"Received {'retry' if is_retry else 'initial'} query: {query}")
             if database_type != "kdb":
                 initial_state.thinking.append(f"Database type: {database_type}")
-                
-            # Add thinking step for conversation context
+            if is_retry:
+                initial_state.thinking.append(f"Retry feedback: {user_feedback}")
+
+            # Handle conversation history
             if conversation_history:
                 try:
-                    # Ensure conversation history is properly formatted
                     sanitized_history = []
                     for msg in conversation_history:
-                        # Convert to dictionary if it's not already
                         msg_dict = msg
                         if not isinstance(msg, dict):
                             try:
-                                # Try to convert to dict if it's a model
                                 if hasattr(msg, 'dict'):
                                     msg_dict = msg.dict()
                                 elif hasattr(msg, 'model_dump'):
                                     msg_dict = msg.model_dump()
                                 else:
-                                    # Skip invalid messages
                                     logger.warning(f"Skipping invalid message in conversation history: {msg}")
                                     continue
                             except Exception as e:
                                 logger.warning(f"Error processing message in conversation history: {e}")
                                 continue
-                        
-                        # Ensure required fields exist
+
                         if 'role' not in msg_dict or 'content' not in msg_dict:
                             logger.warning(f"Skipping message missing required fields: {msg_dict}")
                             continue
-                            
+
                         sanitized_history.append(msg_dict)
-                    
+
                     initial_state.thinking.append(f"Using conversation history with {len(sanitized_history)} messages")
-                    history_text = self._format_conversation_history(sanitized_history)
-                    initial_state.thinking.append(f"Context: {history_text}")
-                    
-                    # Update the state with sanitized history
                     initial_state.conversation_history = sanitized_history
                 except Exception as e:
                     logger.error(f"Error processing conversation history: {e}")
                     initial_state.thinking.append(f"Error processing conversation history: {e}")
                     initial_state.conversation_history = []
-            
-            # Run the workflow
-            logger.info(f"Starting processing for query: {query}")
+
+            # Run the enhanced workflow
+            logger.info(f"Starting {'retry' if is_retry else 'initial'} processing for query: {query}")
             callbacks = []
             if langfuse_client.get_callback_handler():
-                callbacks.append(langfuse_client.get_callback_handler()) #
+                callbacks.append(langfuse_client.get_callback_handler())
 
-            result = await self.workflow.ainvoke(initial_state,config={"callbacks": callbacks})
-            
-            # Extract result values from the dictionary-like object
+            result = await self.workflow.ainvoke(initial_state, config={"callbacks": callbacks})
+
+            # Extract results (same logic as before)
             thinking = result.get("thinking", [])
             intent_type = result.get("intent_type", "query_generation")
-            
+
             if intent_type == "query_generation":
-                # Check if no schema was found
                 if result.get('no_schema_found', False):
                     return {
                         "intent_type": "query_generation",
-                        "generated_query": "// I don't know how to generate a query for this request. " + 
-                            "I couldn't find any relevant tables in the available schemas. " + 
-                            "Please try a different query or upload relevant schemas."
+                        "generated_query": "// I don't know how to generate a query for this request. " +
+                                           "I couldn't find any relevant tables in the available schemas. " +
+                                           "Please try a different query or upload relevant schemas."
                     }, thinking
-                
-                # Return the generated query
+
                 return {
                     "intent_type": "query_generation",
                     "generated_query": result.get("generated_query", "// No query generated")
                 }, thinking
-                
+
             elif intent_type == "schema_description":
-                # Return schema description result
                 return {
                     "intent_type": "schema_description",
                     "generated_content": result.get("generated_content", "No schema information available.")
                 }, thinking
-                
+
             elif intent_type == "help":
-                # Return help content
                 return {
                     "intent_type": "help",
                     "generated_content": result.get("generated_content", "No help information available.")
                 }, thinking
-                
+
             else:
-                # Unknown intent type - default to query generation
                 logger.warning(f"Unknown intent type: {intent_type}")
                 return {
                     "intent_type": "query_generation",
                     "generated_query": "// I'm not sure how to interpret your query. Please try rephrasing it."
                 }, thinking
-            
+
         except Exception as e:
             logger.error(f"Error generating response: {str(e)}", exc_info=True)
-            logger.error(f"Error type: {type(e)}")
-            # Return a fallback response and the error as thinking
             return {
                 "intent_type": "error",
                 "generated_content": f"I encountered an error while processing your request: {str(e)}"

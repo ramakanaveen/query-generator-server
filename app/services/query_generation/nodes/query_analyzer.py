@@ -6,34 +6,164 @@ from langchain.prompts import ChatPromptTemplate
 from app.core.profiling import timeit
 from app.services.query_generation.prompts.anlyzer_prompts import ANALYZER_PROMPT_TEMPLATE
 from app.services.query_generation.prompts.intent_classifier_prompts import INTENT_CLASSIFIER_PROMPT_TEMPLATE
+from app.services.query_generation.prompts.retry_prompts import FEEDBACK_ANALYSIS_PROMPT
 from app.core.logging import logger
 
 @timeit
 async def analyze_query(state):
     """
-    Analyze the natural language query to extract directives, entities, intent, and intent type.
-    Main orchestration function that delegates to specialized functions.
+    Enhanced analyze_query that handles both initial queries and retry requests with conversation essence.
     """
     try:
         query = state.query
         llm = state.llm
-        
+
+        # Load conversation essence if conversation_id is provided
+        if state.conversation_id:
+            await load_conversation_essence(state)
+
         # Add thinking step
-        state.thinking.append("Analyzing query to extract directives, entities, and determine intent type...")
-        
+        if state.is_retry_request:
+            state.thinking.append("🔄 Analyzing retry request with conversation context...")
+        else:
+            state.thinking.append("🔍 Analyzing initial query to extract directives, entities, and intent...")
+
         # Extract directives
         directives = extract_directives(query)
         state.directives = directives
         state.thinking.append(f"Extracted directives: {directives}")
-        
+
+        # Handle retry vs initial request
+        if state.is_retry_request:
+            await process_retry_request(state, query, directives, llm)
+        else:
+            await process_initial_request(state, query, directives, llm)
+
+        # Update conversation essence with new insights
+        if state.conversation_id:
+            await update_conversation_essence_from_analysis(state)
+
+        return state
+
+    except Exception as e:
+        logger.error(f"Error in enhanced query analyzer: {str(e)}", exc_info=True)
+        state.thinking.append(f"Error analyzing query: {str(e)}")
+        # Default to query generation on error
+        state.intent_type = "query_generation"
+        return state
+
+async def load_conversation_essence(state):
+    """
+    Load conversation essence from database into state.
+    """
+    try:
+        from app.services.conversation_manager import ConversationManager
+        conversation_manager = ConversationManager()
+
+        # Get conversation essence
+        essence = await conversation_manager.get_conversation_essence(state.conversation_id)
+
+        if essence:
+            state.conversation_essence = essence
+            state.original_intent = essence.get("original_intent")
+            state.current_understanding = essence.get("current_understanding")
+            state.feedback_trail = essence.get("feedback_trail", [])
+            state.key_context = essence.get("key_context", [])
+
+            state.thinking.append(f"📚 Loaded conversation essence: {len(state.feedback_trail)} previous corrections")
+
+            if state.original_intent:
+                state.thinking.append(f"🎯 Original intent: {state.original_intent}")
+            if state.current_understanding:
+                state.thinking.append(f"💭 Current understanding: {state.current_understanding}")
+        else:
+            state.thinking.append("📝 No previous conversation essence found")
+
+    except Exception as e:
+        logger.error(f"Error loading conversation essence: {str(e)}", exc_info=True)
+        state.thinking.append(f"Error loading conversation context: {str(e)}")
+
+async def process_retry_request(state, query, directives, llm):
+    """
+    Process retry request with feedback analysis and context preservation.
+    """
+    try:
+        state.thinking.append("🔍 Analyzing user feedback to understand what went wrong...")
+
+        # Analyze the user feedback
+        feedback_analysis = await analyze_user_feedback(
+            original_query=query,
+            generated_query=state.original_generated_query,
+            user_feedback=state.user_feedback,
+            original_intent=state.original_intent or "Unknown",
+            current_understanding=state.current_understanding or "Unknown",
+            previous_corrections=[f.get("correction", "") for f in state.feedback_trail],
+            llm=llm
+        )
+
+        # Store feedback analysis in retry context
+        state.retry_context = feedback_analysis
+        state.thinking.append(f"📋 Feedback analysis: {feedback_analysis.get('issue_type', 'Unknown issue')}")
+
+        # Extract entities from both original query and feedback
+        entities = extract_entities_from_retry(query, state.user_feedback, state.key_context)
+        state.entities = entities
+
+        # Determine intent type (usually query_generation for retries)
+        intent_type = await determine_intent_type(state, query, directives, llm)
+        state.intent_type = intent_type
+
+        # Set intent based on retry context
+        state.intent = feedback_analysis.get("user_intent", "query_refinement")
+
+        # Add current feedback to trail (will be saved later)
+        new_feedback_entry = {
+            "attempt": len(state.feedback_trail) + 1,
+            "feedback": state.user_feedback,
+            "correction": feedback_analysis.get("correction_strategy", "General refinement"),
+            "issue_type": feedback_analysis.get("issue_type", "GENERAL"),
+            "learning_point": feedback_analysis.get("learning_point", "")
+        }
+        state.feedback_trail.append(new_feedback_entry)
+
+        state.thinking.append(f"🔧 Correction strategy: {feedback_analysis.get('correction_strategy', 'Not specified')}")
+
+    except Exception as e:
+        logger.error(f"Error processing retry request: {str(e)}", exc_info=True)
+        state.thinking.append(f"Error analyzing retry feedback: {str(e)}")
+        # Fallback for retry
+        state.intent_type = "query_generation"
+        state.intent = "query_refinement"
+
+async def process_initial_request(state, query, directives, llm):
+    """
+    Process initial request with intent determination and context extraction.
+    """
+    try:
+        # Add context from conversation history if available
+        conversation_context = ""
+        previous_directives = []
+
+        if hasattr(state, 'conversation_history') and state.conversation_history:
+            # Extract directives from previous messages
+            for msg in state.conversation_history:
+                if msg.get('role') == 'user':
+                    directive_matches = re.findall(r'@([A-Z]+)', msg.get('content', ''))
+                    for directive in directive_matches:
+                        if directive not in previous_directives:
+                            previous_directives.append(directive)
+
+        # Use previous directives if current query has none
+        if not directives and previous_directives:
+            state.thinking.append(f"No directives in current query, using previous: {previous_directives}")
+            state.directives = previous_directives
+            directives = previous_directives
+
         # Determine intent type through multi-stage process
         intent_type = await determine_intent_type(state, query, directives, llm)
         state.intent_type = intent_type
         state.thinking.append(f"Determined intent type: {intent_type}")
-        logger.debug(f"Detected intent_type: {intent_type}")
-        if intent_type == "schema_description":
-            logger.debug("Processing schema description intent...")
-            # Process specific intent type
+
         if intent_type == "query_generation":
             await process_query_generation_intent(state, query, directives, llm)
         elif intent_type == "schema_description":
@@ -44,18 +174,169 @@ async def analyze_query(state):
             # Handle unknown intent - default to query generation
             state.thinking.append(f"Unknown intent type '{intent_type}', defaulting to query generation")
             await process_query_generation_intent(state, query, directives, llm)
-        
-        # Check state after processing
-        logger.debug(f"State after processing: schema_targets={state.schema_targets}")
-        
-        return state
-    
+
     except Exception as e:
-        logger.error(f"Error in query analyzer: {str(e)}")
-        state.thinking.append(f"Error analyzing query: {str(e)}")
-        # Default to query generation on error
+        logger.error(f"Error processing initial request: {str(e)}", exc_info=True)
+        state.thinking.append(f"Error in initial analysis: {str(e)}")
         state.intent_type = "query_generation"
-        return state
+
+async def analyze_user_feedback(original_query, generated_query, user_feedback,
+                                original_intent, current_understanding, previous_corrections, llm):
+    """
+    Analyze user feedback to understand what went wrong and how to fix it.
+    """
+    try:
+        # Format previous corrections for context
+        corrections_text = "\n".join([f"- {corr}" for corr in previous_corrections]) if previous_corrections else "None"
+
+        # Create prompt for feedback analysis
+        prompt = ChatPromptTemplate.from_template(FEEDBACK_ANALYSIS_PROMPT)
+
+        chain = prompt | llm
+        response = await chain.ainvoke({
+            "original_query": original_query,
+            "generated_query": generated_query,
+            "user_feedback": user_feedback,
+            "original_intent": original_intent,
+            "current_understanding": current_understanding,
+            "previous_corrections": corrections_text
+        })
+
+        # Parse the structured response
+        analysis = parse_feedback_analysis(response.content.strip())
+        return analysis
+
+    except Exception as e:
+        logger.error(f"Error analyzing feedback: {str(e)}", exc_info=True)
+        # Return fallback analysis
+        return {
+            "issue_type": "GENERAL",
+            "specific_problem": "Analysis failed",
+            "user_intent": "Refine the query based on feedback",
+            "correction_strategy": "Address user feedback",
+            "learning_point": "General refinement needed"
+        }
+
+def parse_feedback_analysis(response_text: str) -> Dict[str, str]:
+    """
+    Parse the structured feedback analysis response.
+    """
+    analysis = {
+        "issue_type": "GENERAL",
+        "specific_problem": "",
+        "user_intent": "",
+        "correction_strategy": "",
+        "learning_point": ""
+    }
+
+    try:
+        lines = response_text.split('\n')
+        for line in lines:
+            line = line.strip()
+
+            if line.startswith('Issue_Type:'):
+                analysis["issue_type"] = line.replace('Issue_Type:', '').strip()
+            elif line.startswith('Specific_Problem:'):
+                analysis["specific_problem"] = line.replace('Specific_Problem:', '').strip()
+            elif line.startswith('User_Intent:'):
+                analysis["user_intent"] = line.replace('User_Intent:', '').strip()
+            elif line.startswith('Correction_Strategy:'):
+                analysis["correction_strategy"] = line.replace('Correction_Strategy:', '').strip()
+            elif line.startswith('Learning_Point:'):
+                analysis["learning_point"] = line.replace('Learning_Point:', '').strip()
+
+    except Exception as e:
+        logger.error(f"Error parsing feedback analysis: {str(e)}")
+
+    return analysis
+
+def extract_entities_from_retry(original_query, user_feedback, existing_context):
+    """
+    Extract entities from both original query and user feedback for retry.
+    """
+    entities = []
+
+    # Extract from original query
+    original_entities = extract_entities_from_text(original_query)
+    entities.extend(original_entities)
+
+    # Extract from feedback
+    feedback_entities = extract_entities_from_text(user_feedback)
+    entities.extend(feedback_entities)
+
+    # Include existing context entities
+    if existing_context:
+        entities.extend(existing_context)
+
+    # Remove duplicates while preserving order
+    unique_entities = []
+    for entity in entities:
+        if entity not in unique_entities:
+            unique_entities.append(entity)
+
+    return unique_entities
+
+def extract_entities_from_text(text):
+    """
+    Extract entities (symbols, currencies, etc.) from text.
+    """
+    entities = []
+
+    # Currency pairs (6 letters)
+    currency_pairs = re.findall(r'\b[A-Z]{6}\b', text.upper())
+    entities.extend(currency_pairs)
+
+    # Stock symbols (3-5 letters)
+    symbols = re.findall(r'\b[A-Z]{3,5}\b', text.upper())
+    entities.extend([s for s in symbols if s not in currency_pairs])
+
+    # Time references
+    time_refs = re.findall(r'\b(?:today|yesterday|daily|hourly|weekly|monthly)\b', text.lower())
+    entities.extend(time_refs)
+
+    # Numerical values
+    numbers = re.findall(r'\b\d+(?:\.\d+)?\b', text)
+    entities.extend(numbers)
+
+    return entities
+
+async def update_conversation_essence_from_analysis(state):
+    """
+    Update conversation essence with insights from current analysis.
+    """
+    try:
+        from app.services.conversation_manager import ConversationManager
+        conversation_manager = ConversationManager()
+
+        # Update original intent if this is the first query
+        if not state.original_intent and not state.is_retry_request:
+            intent = state.intent or "General database query"
+            await conversation_manager.update_original_intent(state.conversation_id, intent)
+            state.thinking.append(f"💾 Stored original intent: {intent}")
+
+        # Update current understanding
+        if state.intent_type == "query_generation":
+            understanding = f"{state.intent} with entities: {', '.join(state.entities[:3])}"
+            await conversation_manager.update_current_understanding(state.conversation_id, understanding)
+
+        # Add key context (directives, entities)
+        context_items = []
+        context_items.extend([f"@{d}" for d in state.directives])
+        context_items.extend(state.entities[:5])  # Limit to 5 entities
+
+        if context_items:
+            await conversation_manager.add_key_context(state.conversation_id, context_items)
+            state.thinking.append(f"💾 Added key context: {context_items}")
+
+        # For retry requests, append feedback to trail
+        if state.is_retry_request and state.feedback_trail:
+            latest_feedback = state.feedback_trail[-1]
+            await conversation_manager.append_feedback_to_trail(state.conversation_id, latest_feedback)
+            state.thinking.append("💾 Stored feedback in conversation trail")
+
+    except Exception as e:
+        logger.error(f"Error updating conversation essence: {str(e)}", exc_info=True)
+        state.thinking.append(f"Warning: Could not update conversation context: {str(e)}")
 
 def extract_directives(query):
     """Extract directives from the query text."""
@@ -75,15 +356,15 @@ async def determine_intent_type(state, query, directives, llm):
     """
     # First-pass intent detection using patterns
     intent_type = detect_intent_by_pattern(query, directives)
-    
+
     # Refine intent detection using directives
     intent_type = refine_intent_with_directives(query, directives, intent_type)
-    
+
     # For ambiguous cases, use LLM classification
     if is_intent_ambiguous(query, intent_type):
         intent_type = await classify_intent_with_llm(query, directives, llm)
         state.thinking.append("Used LLM to classify ambiguous intent")
-    
+
     return intent_type
 
 def detect_intent_by_pattern(query_text, directives):
