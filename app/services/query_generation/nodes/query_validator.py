@@ -539,6 +539,20 @@ async def validate_query(state):
             # Store corrected query for potential use by the refiner
             state.llm_corrected_query = llm_validation.corrected_query
 
+        def convert_to_string(item):
+            if isinstance(item, dict):
+                parts = []
+                if 'location' in item:
+                    parts.append(f"Location: {item['location']}")
+                if 'message' in item:
+                    parts.append(f"Message: {item['message']}")
+                if 'suggestion' in item:
+                    parts.append(f"Suggestion: {item['suggestion']}")
+                return " | ".join(parts) if parts else str(item)
+            return str(item)
+        validation_errors = [convert_to_string(error) for error in validation_errors]
+        detailed_feedback = [convert_to_string(feedback) for feedback in detailed_feedback]
+
         # Update state with validation results
         state.validation_result = validation_result
         state.validation_errors = validation_errors
