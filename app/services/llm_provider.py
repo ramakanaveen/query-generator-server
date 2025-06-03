@@ -6,6 +6,7 @@ from pathlib import Path
 import os
 from google.cloud import aiplatform
 import time
+from app.core.langfuse_client import langfuse_client # Import your Langfuse client
 
 class LLMProvider:
     """
@@ -65,6 +66,9 @@ class LLMProvider:
             project=settings.GOOGLE_PROJECT_ID,
             location=settings.GOOGLE_LOCATION,
         )
+        # Attach Langfuse callback handler
+        if langfuse_client.get_callback_handler():
+            model.callbacks = [langfuse_client.get_callback_handler()] #
 
         self._models["gemini"] = model
         return model
@@ -82,6 +86,9 @@ class LLMProvider:
             anthropic_api_key=settings.API_KEY_ANTHROPIC,
             max_tokens=settings.CLAUDE_MAX_TOKENS,
         )
+        # Attach Langfuse callback handler
+        if langfuse_client.get_callback_handler():
+            model.callbacks = [langfuse_client.get_callback_handler()] #
 
         self._models["claude"] = model
 

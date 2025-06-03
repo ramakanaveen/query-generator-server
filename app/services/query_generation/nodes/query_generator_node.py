@@ -3,7 +3,8 @@ from typing import Dict, Any, List
 from langchain.prompts import ChatPromptTemplate
 
 from app.core.profiling import timeit
-from app.services.query_generation.prompts.generator_prompts import GENERATOR_PROMPT_TEMPLATE, REFINED_PROMPT_TEMPLATE
+from app.services.query_generation.prompts.generator_prompts import GENERATOR_PROMPT_TEMPLATE, REFINED_PROMPT_TEMPLATE, \
+    get_complexity_guidance
 from app.core.logging import logger
 from app.services.feedback_manager import FeedbackManager
 
@@ -74,7 +75,10 @@ async def generate_query(state):
         user_id = state.user_id if hasattr(state, 'user_id') else None
         conversation_summary = state.conversation_summary if hasattr(state, 'conversation_summary') else None
         llm = state.llm
-        
+        query_complexity = getattr(state, 'query_complexity', 'SINGLE_LINE')
+        execution_plan = getattr(state, 'execution_plan', [])
+        confidence = getattr(state, 'confidence', 'medium')
+        reasoning = getattr(state, 'reasoning', '')
         # Check if this is a refined generation attempt
         is_refinement = hasattr(state, 'refinement_guidance') and state.refinement_guidance
         
@@ -82,7 +86,16 @@ async def generate_query(state):
         if is_refinement:
             state.thinking.append("Generating improved query based on refinement guidance...")
         else:
-            state.thinking.append("Generating database query...")
+            if query_complexity != 'SINGLE_LINE' or execution_plan:
+                state.thinking.append(f"🎯 Generating {query_complexity} query")
+                if execution_plan:
+                    state.thinking.append(f"📋 Plan: {' → '.join(execution_plan)}")
+                if confidence != 'medium':
+                    state.thinking.append(f"💭 Confidence: {confidence}")
+                if reasoning:
+                    state.thinking.append(f"🔍 Reasoning: {reasoning}")
+            else:
+                state.thinking.append("⚙️ Generating database query...")
             
         # Check if schema is None
         if schema is None:
@@ -130,6 +143,8 @@ async def generate_query(state):
         
         # Use LLM to generate the query
         if is_refinement:
+            # For refinement, use existing logic but add KDB notes
+            _, kdb_notes = get_complexity_guidance(query_complexity, execution_plan)
             # Use a specialized prompt that includes refinement guidance
             prompt = ChatPromptTemplate.from_template(REFINED_PROMPT_TEMPLATE)
             chain = prompt | llm
@@ -143,9 +158,13 @@ async def generate_query(state):
                 "refinement_guidance": state.refinement_guidance,
                 "original_query": state.original_query,
                 # Add detailed feedback if available
-                "detailed_feedback": "\n".join(state.detailed_feedback) if hasattr(state, 'detailed_feedback') else ""
+                "detailed_feedback": "\n".join(state.detailed_feedback) if hasattr(state, 'detailed_feedback') else "",
+                "kdb_notes": kdb_notes
             }
         else:
+            # Get complexity-specific guidance and KDB notes
+            complexity_guidance, kdb_notes = get_complexity_guidance(query_complexity, execution_plan)
+
             # Use the standard prompt with few-shot examples
             # Construct the final prompt with all components
             final_prompt_template = f"{GENERATOR_PROMPT_TEMPLATE}\n\n{few_shot_examples}\n{summary_context}{conversation_context}"
@@ -161,7 +180,10 @@ async def generate_query(state):
                 "schema": schema,
                 "database_type": database_type,
                 "examples": schema.get("examples", []),
-                "conversation_context": conversation_context
+                "conversation_context": conversation_context,
+                "complexity_guidance": complexity_guidance,
+                "kdb_notes": kdb_notes,
+                "query_complexity": query_complexity
             }
         
         # Get the response from the LLM

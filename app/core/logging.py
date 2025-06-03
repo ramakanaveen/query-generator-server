@@ -13,3 +13,9 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger("query-generator")
+
+# Set higher logging levels for verbose libraries
+logging.getLogger("httpcore").setLevel(logging.INFO)
+logging.getLogger("httpx").setLevel(logging.INFO)
+# You might also consider adding "langfuse" if it has its own verbose logger
+logging.getLogger("langfuse").setLevel(logging.INFO)

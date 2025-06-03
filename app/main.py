@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.routes import schema_management
 from app.core.db import db_pool
 from app.routes import debug_schema
+from app.core.langfuse_client import langfuse_client # Import your Langfuse client
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -17,7 +18,10 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown: Cleanup resources
     await db_pool.close()
-
+    # Flush Langfuse client on shutdown
+    lf_client = langfuse_client.get_client()
+    if lf_client:
+        lf_client.flush()
 app = FastAPI(
     title="Query Generator API",
     description="API for generating database queries from natural language",

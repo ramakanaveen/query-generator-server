@@ -7,6 +7,7 @@ import uuid
 import json
 from typing import Dict, Any, List
 
+from app.core.config import settings
 from app.schemas.query import QueryRequest, QueryResponse, ExecutionRequest, ExecutionResponse
 from app.services.llm_provider import LLMProvider
 from app.services.conversation_manager import ConversationManager
@@ -67,9 +68,11 @@ async def generate_query(request: QueryRequest):
         # Initialize services
         llm_provider = LLMProvider()
         llm = llm_provider.get_model(model)
-        
+
+        use_unified = settings.USE_UNIFIED_ANALYZER
+
         # Initialize query generator
-        query_generator = QueryGenerator(llm)
+        query_generator = QueryGenerator(llm, use_unified)
         
         # Generate result
         execution_id = str(uuid.uuid4())

@@ -1,5 +1,64 @@
 # app/services/query_generation/prompts/generator_prompts.py
-from app.services.query_generation.prompts.shared_constants import KDB_NOTES
+from app.services.query_generation.prompts.shared_constants import KDB_NOTES_SINGLE, KDB_NOTES_MULTI, KDB_NOTES
+
+def get_complexity_guidance(query_complexity="SINGLE_LINE", execution_plan=None):
+    """
+    Get complexity-specific guidance and KDB notes.
+
+    Args:
+        query_complexity: "SINGLE_LINE" or "MULTI_LINE"
+        execution_plan: List of execution steps (for multi-line queries)
+
+    Returns:
+        Tuple of (complexity_guidance, kdb_notes)
+    """
+    if query_complexity == "SINGLE_LINE":
+        complexity_guidance = """
+### 🎯 SINGLE-LINE QUERY APPROACH
+
+**CRITICAL**: Generate ONE efficient KDB+/q expression that accomplishes the entire request.
+
+**Strategy**:
+- Combine all operations (filtering, aggregation, sorting) into a single expression
+- Avoid intermediate variables or multiple statements
+- Focus on clarity and efficiency in one line
+- Use proper KDB+/q syntax patterns shown below
+
+"""
+        return complexity_guidance, KDB_NOTES_SINGLE
+
+    else:  # MULTI_LINE
+        if execution_plan:
+            plan_text = "\n".join([f"   {i+1}. {step}" for i, step in enumerate(execution_plan)])
+            complexity_guidance = f"""
+### 🔧 MULTI-LINE QUERY APPROACH
+
+**CRITICAL**: Break this request into logical steps using intermediate variables.
+
+**Execution Plan**:
+{plan_text}
+
+**Strategy**:
+- Each step should correspond to the plan above
+- Use meaningful variable names (e.g., `filteredData`, `bucketedPrices`, `correlationResults`)
+- Build complexity incrementally through logical steps
+- Final step should produce the requested output
+
+"""
+        else:
+            complexity_guidance = """
+### 🔧 MULTI-LINE QUERY APPROACH
+
+**CRITICAL**: Break this complex request into logical steps using intermediate variables.
+
+**Strategy**:
+- Separate different stages of computation into distinct steps
+- Use meaningful variable names for each intermediate result
+- Build complexity incrementally through logical steps
+- Final step should produce the requested output
+
+"""
+        return complexity_guidance, KDB_NOTES_MULTI
 
 GENERATOR_PROMPT_TEMPLATE = """
 You are a world-class KDB+/q expert specializing in financial trading systems. This task is extremely important for generating accurate market data queries that will be used in production systems.
@@ -9,7 +68,8 @@ Take a deep breath and work on this problem step-by-step.
 ### Task Overview
 You are an expert in generating accurate {database_type} queries from natural language inputs. 
 Your objective is to produce **clear, logically structured, and syntactically correct {database_type} queries** aimed at handling complex data transformations.
-Use multi-line {database_type} queries for non-trivial requests.
+
+{complexity_guidance}
 
 ---
 
@@ -38,13 +98,14 @@ Use multi-line {database_type} queries for non-trivial requests.
     Consider previous interactions for better context understanding:
     {conversation_context}
 
-""" + KDB_NOTES + """
+{kdb_notes}
 
 ### Critical Success Factors for {database_type}:
 - **Production-Ready**: Query must execute without errors in real trading systems
 - **Performance-Optimized**: Use efficient KDB+/q patterns and vector operations
 - **Schema-Compliant**: All references must match the provided schema exactly
 - **Intent-Accurate**: Query logic must precisely match the user's request
+- **Complexity-Appropriate**: Follow the {query_complexity} approach as specified above
 
 ### Pre-Generation Validation Checklist:
 Before outputting your query, mentally verify:
@@ -55,14 +116,14 @@ Before outputting your query, mentally verify:
 - [ ] Sorting uses xdesc/xasc syntax, not ORDER BY
 - [ ] The `from` keyword is included in select statements
 - [ ] Query logic matches the user's stated intent
-- [ ] Complex operations are broken into logical intermediate steps
+- [ ] Approach matches the specified complexity: {query_complexity}
 
 ### Natural Language Query from User
 The user's natural language query is as follows:
 - **User Query**: {query}
 
 ### Your Mission:
-Generate a production-ready {database_type} query that perfectly fulfills the user's request.
+Generate a production-ready {database_type} query that perfectly fulfills the user's request following the {query_complexity} approach.
 
 **Output Only the Query** - no comments, explanations, or markdown formatting.
 """
@@ -93,7 +154,7 @@ The following query was generated but failed validation:
 Use this schema to ensure all corrections are accurate:
 {schema}
 
-""" + KDB_NOTES + """
+{kdb_notes}
 
 ### Systematic Refinement Approach:
 
@@ -140,3 +201,4 @@ Generate the completely corrected {database_type} query that resolves all identi
 
 **Output Only the Corrected Query** - no additional remarks, explanations, or formatting.
 """
+

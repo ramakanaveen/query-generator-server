@@ -55,7 +55,17 @@ class Settings(BaseSettings):
     
     # Schema directory
     SCHEMAS_DIRECTORY: str = os.getenv("SCHEMAS_DIRECTORY", str(_BASE_DIR / "app" / "schemas"))
-    
+
+    # Langfuse Settings
+    LANGFUSE_PUBLIC_KEY: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
+    LANGFUSE_SECRET_KEY: str = os.getenv("LANGFUSE_SECRET_KEY", "")
+    LANGFUSE_HOST: str = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+    LANGFUSE_ACTIVATE: bool = os.getenv("LANGFUSE_ACTIVATE", "False").lower() in ("true", "1", "t") #
+
+    # unified analyser
+    USE_UNIFIED_ANALYZER: bool = os.getenv("USE_UNIFIED_ANALYZER", "False").lower() in ("true", "1", "t")
+
+
     class Config:
         case_sensitive = True
 

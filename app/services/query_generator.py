@@ -10,8 +10,10 @@ from app.services.query_generation.nodes import (
     schema_retriever,
     query_generator_node,
     query_validator,
-    query_refiner
+    query_refiner,
+    unified_query_analyzer
 )
+from app.core.langfuse_client import langfuse_client # Import your Langfuse client
 
 class QueryGenerationState(BaseModel):
     """State for the query generation process."""
@@ -41,31 +43,44 @@ class QueryGenerationState(BaseModel):
     llm_corrected_query: Optional[str] = Field(default=None, description="Corrected query from LLM")
     detailed_feedback: Optional[str] = Field(default=None, description="Detailed feedback from the query")
     validation_details: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Validation details")
+    use_unified_analyzer: bool = Field(default=False, description="Whether to use the new unified analyzer")
+    confidence: str = Field(default="medium", description="Analysis confidence level")
+    reasoning: str = Field(default="", description="Analysis reasoning")
+    query_complexity: str = Field(default="SINGLE_LINE", description="Query complexity")
+    execution_plan: List[str] = Field(default_factory=list, description="Execution plan")
+    query_type: str = Field(default="select_basic", description="Query type")
+
 class QueryGenerator:
     """
     Service for generating database queries from natural language using LangGraph.
     """
     
-    def __init__(self, llm):
+    def __init__(self, llm,use_unified_analyzer=False):
         self.llm = llm
+        self.use_unified_analyzer = use_unified_analyzer
         self.workflow = self._build_workflow()
-    
+
+
     def _build_workflow(self) -> StateGraph:
         """Build the LangGraph workflow for query generation."""
         # Initialize the workflow with our state
         workflow = StateGraph(QueryGenerationState)
         
         # Add nodes
-        workflow.add_node("query_analyzer", query_analyzer.analyze_query)
+        # Conditionally add the analyzer based on configuration
+        if getattr(self, 'use_unified_analyzer', False):
+            workflow.add_node("query_analyzer", unified_query_analyzer.unified_analyze_query)
+        else:
+            workflow.add_node("query_analyzer", query_analyzer.analyze_query)
         workflow.add_node("schema_retriever", schema_retriever.retrieve_schema)
         workflow.add_node("query_generator", query_generator_node.generate_query)
         workflow.add_node("query_validator", query_validator.validate_query)
         workflow.add_node("query_refiner", query_refiner.refine_query)
         workflow.add_node("schema_description", schema_description_node.generate_schema_description)
-        
+
         # Set the entrypoint
         workflow.set_entry_point("query_analyzer")
-        
+
         # Add routing based on intent type
         workflow.add_conditional_edges(
             "query_analyzer",
@@ -79,7 +94,7 @@ class QueryGenerator:
         workflow.add_edge("schema_retriever", "query_generator")
         workflow.add_edge("query_generator", "query_validator")
         workflow.add_edge("query_refiner", "query_generator")
-        
+
         # Add schema description path - goes straight to END
         workflow.add_edge("schema_description", END)
         
@@ -193,7 +208,11 @@ class QueryGenerator:
             
             # Run the workflow
             logger.info(f"Starting processing for query: {query}")
-            result = await self.workflow.ainvoke(initial_state)
+            callbacks = []
+            if langfuse_client.get_callback_handler():
+                callbacks.append(langfuse_client.get_callback_handler()) #
+
+            result = await self.workflow.ainvoke(initial_state,config={"callbacks": callbacks})
             
             # Extract result values from the dictionary-like object
             thinking = result.get("thinking", [])
