@@ -1,7 +1,7 @@
 # app/services/query_generation/prompts/intent_classifier_prompts.py
 
 INTENT_CLASSIFICATION_PROMPT = """
-You are an expert intent classifier for database query systems. Your job is to understand what the user wants and classify their intent accurately.
+You are an expert intent classifier for database query systems with enhanced schema target extraction capabilities. Your job is to understand what the user wants and classify their intent accurately, including extracting specific schema targets when applicable.
 
 ## User Request Analysis
 
@@ -65,6 +65,27 @@ The user needs assistance with using the system, syntax, or general guidance.
 - Syntax help requests
 - Tutorial or instruction requests
 
+## Enhanced Schema Target Extraction
+
+**CRITICAL**: If the intent is "schema_description", you MUST extract schema targets with these components:
+
+### Tables Extraction Rules:
+- **All Tables Requests**: "what tables", "show all tables", "list tables" → ["*ALL*"]
+- **Directive-Based**: If @DIRECTIVES present, use them as table targets
+- **Specific Tables**: "describe trades table", "show market_price" → ["trades"], ["market_price"]
+- **Schema Groups**: "FX tables", "trading data" → relevant schema categories
+- **Fuzzy Matches**: "price data", "market info" → infer likely table names
+
+### Columns Extraction Rules:
+- **Specific Columns**: "what columns in trades", "describe price column" → extract column names
+- **Column Types**: "show all date columns", "timestamp fields" → relevant column categories
+- **Empty if General**: If asking about tables generally, leave columns empty
+
+### Detail Level Extraction Rules:
+- **detailed**: "detailed breakdown", "comprehensive", "all information", "full schema"
+- **summary**: "brief overview", "quick summary", "list", "overview"
+- **standard**: Default for most requests without specific detail indicators
+
 ## Special Considerations
 
 ### Follow-up Detection
@@ -94,7 +115,8 @@ Provide your analysis in this exact format:
 INTENT_TYPE: [query_generation | schema_description | help]
 CONFIDENCE: [high | medium | low]
 IS_FOLLOW_UP: [true | false]
-REASONING: [Brief explanation of your classification decision]
+SCHEMA_TARGETS: {{"tables": ["table1", "table2"], "columns": ["col1", "col2"], "detail_level": "standard"}}
+REASONING: [Brief explanation of your classification decision and schema target extraction]
 CONVERSATION_CONTEXT_SUMMARY: [Key context from conversation that influenced your decision]
 RETRY_ANALYSIS: [If retry: what went wrong and what user wants now]
 ```
@@ -112,22 +134,44 @@ RETRY_ANALYSIS: [If retry: what went wrong and what user wants now]
 ## Examples
 
 **Example 1:**
-User: "Show me EURUSD trades today"
-→ INTENT_TYPE: query_generation (clear data request)
+User: "@FXSPOT What tables are available?"
+→ INTENT_TYPE: schema_description
+→ SCHEMA_TARGETS: {{"tables": ["*ALL*"], "columns": [], "detail_level": "summary"}}
 
 **Example 2:**
-User: "What tables are available for FX data?"
-→ INTENT_TYPE: schema_description (asking about structure)
+User: "@FXSPOT Show me detailed information about the market_price table"
+→ INTENT_TYPE: schema_description  
+→ SCHEMA_TARGETS: {{"tables": ["market_price"], "columns": [], "detail_level": "detailed"}}
 
 **Example 3:**
-User: "How do I filter by date in KDB?"
-→ INTENT_TYPE: help (asking for guidance)
+User: "@FXSPOT What columns are in market_price table?"
+→ INTENT_TYPE: schema_description
+→ SCHEMA_TARGETS: {{"tables": ["market_price"], "columns": [], "detail_level": "standard"}}
 
 **Example 4:**
+User: "Quick overview of available data @FXSPOT @FXFUSIONALGO"
+→ INTENT_TYPE: schema_description
+→ SCHEMA_TARGETS: {{"tables": ["FXFUSIONALGO", "FXSPOT"], "columns": [], "detail_level": "summary"}}
+
+**Example 5:**
+User: "Show me EURUSD trades today"
+→ INTENT_TYPE: query_generation
+→ SCHEMA_TARGETS: {{}} (empty - not schema description)
+
+**Example 6:**
 User: "Change that to GBPUSD instead" (with previous EURUSD query)
 → INTENT_TYPE: query_generation, IS_FOLLOW_UP: true
+→ SCHEMA_TARGETS: {{}} (empty - not schema description)
+## Critical Instructions
 
-Now classify the user's request above.
+1. **Always provide SCHEMA_TARGETS** for schema_description intent, even if empty
+2. **Use proper JSON format** in SCHEMA_TARGETS with double quotes
+3. **Include all three keys**: "tables", "columns", "detail_level"
+4. **Use "*ALL*" for general table requests**
+5. **Extract specific table/column names when mentioned**
+6. **Infer detail level from query language and context**
+
+Now classify the user's request above and extract schema targets if applicable.
 """
 
 RETRY_INTENT_ANALYSIS_PROMPT = """

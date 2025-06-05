@@ -1,15 +1,17 @@
 # app/services/query_generation/nodes/intent_classifier.py
 
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any
+
 from langchain.prompts import ChatPromptTemplate
 
-from app.core.profiling import timeit
 from app.core.logging import logger
+from app.core.profiling import timeit
 from app.services.query_generation.prompts.intent_classifier_prompts import (
     INTENT_CLASSIFICATION_PROMPT,
     RETRY_INTENT_ANALYSIS_PROMPT
 )
+
 
 @timeit
 async def classify_intent(state):
@@ -19,6 +21,7 @@ async def classify_intent(state):
     This is the first node in the enhanced workflow that determines:
     - Primary intent type (query_generation, schema_description, help)
     - Whether this is a follow-up to previous queries
+    - For schema_description: extracts schema targets, detail level, etc.
     - Retry request analysis if applicable
     """
     try:
@@ -49,6 +52,10 @@ async def classify_intent(state):
         state.thinking.append(f"📋 Intent classified as: {state.intent_type}")
         if hasattr(state, 'is_follow_up') and state.is_follow_up:
             state.thinking.append("🔗 Detected as follow-up to previous query")
+
+        # Log schema targets if extracted
+        if hasattr(state, 'schema_targets') and state.schema_targets:
+            state.thinking.append(f"🎯 Schema targets extracted: {state.schema_targets}")
 
         return state
 
@@ -90,6 +97,23 @@ async def handle_initial_intent_classification(state, llm, directives, conversat
         state.is_follow_up = classification_result.get("is_follow_up", False)
         state.classification_reasoning = classification_result.get("reasoning", "")
         state.conversation_context_summary = classification_result.get("conversation_context_summary", "")
+
+        # NEW: Extract schema targets if this is a schema_description intent
+        if state.intent_type == "schema_description":
+            schema_targets = classification_result.get("schema_targets", {})
+
+            # Ensure schema_targets has all required keys with defaults
+            state.schema_targets = {
+                "tables": schema_targets.get("tables", directives if directives else ["*ALL*"]),
+                "columns": schema_targets.get("columns", []),
+                "detail_level": schema_targets.get("detail_level", "standard")
+            }
+
+            state.thinking.append(f"📊 Schema targets: tables={state.schema_targets['tables']}")
+            state.thinking.append(f"📋 Detail level: {state.schema_targets['detail_level']}")
+
+            if state.schema_targets['columns']:
+                state.thinking.append(f"🔍 Specific columns: {state.schema_targets['columns']}")
 
         # Log detailed classification
         state.thinking.append(f"🎯 Confidence: {state.confidence}")
@@ -195,7 +219,8 @@ def parse_intent_classification(response_text: str) -> Dict[str, Any]:
         "confidence": "medium",
         "is_follow_up": False,
         "reasoning": "",
-        "conversation_context_summary": ""
+        "conversation_context_summary": "",
+        "schema_targets": {}
     }
 
     try:
@@ -217,6 +242,18 @@ def parse_intent_classification(response_text: str) -> Dict[str, Any]:
                 follow_up = line.replace('IS_FOLLOW_UP:', '').strip().lower()
                 result["is_follow_up"] = follow_up in ["true", "yes", "1"]
 
+            elif line.startswith('SCHEMA_TARGETS:'):
+                schema_targets_str = line.replace('SCHEMA_TARGETS:', '').strip()
+                try:
+                    # Try to parse as JSON-like structure
+                    import json
+                    # Handle common formatting issues
+                    schema_targets_str = schema_targets_str.replace("'", '"')
+                    result["schema_targets"] = json.loads(schema_targets_str)
+                except (json.JSONDecodeError, ValueError):
+                    # Fallback to manual parsing
+                    result["schema_targets"] = parse_schema_targets_manually(schema_targets_str)
+
             elif line.startswith('REASONING:'):
                 result["reasoning"] = line.replace('REASONING:', '').strip()
 
@@ -224,8 +261,42 @@ def parse_intent_classification(response_text: str) -> Dict[str, Any]:
                 result["conversation_context_summary"] = line.replace('CONVERSATION_CONTEXT_SUMMARY:', '').strip()
 
     except Exception as e:
-        logger.error(f"Error parsing intent classification: {str(e)}")
+        logger.error(f"Error parsing enhanced intent classification: {str(e)}")
         logger.debug(f"Response text was: {response_text}")
+
+    return result
+
+def parse_schema_targets_manually(schema_targets_str: str) -> Dict[str, Any]:
+    """Manual fallback parsing for schema targets when JSON parsing fails."""
+    result = {
+        "tables": [],
+        "columns": [],
+        "detail_level": "standard"
+    }
+
+    try:
+        # Extract tables - look for patterns like tables: [...] or "tables": [...]
+        tables_match = re.search(r'["\']?tables["\']?\s*:\s*\[(.*?)\]', schema_targets_str, re.IGNORECASE)
+        if tables_match:
+            tables_str = tables_match.group(1)
+            # Extract quoted strings
+            tables = re.findall(r'["\']([^"\']+)["\']', tables_str)
+            result["tables"] = tables
+
+        # Extract columns
+        columns_match = re.search(r'["\']?columns["\']?\s*:\s*\[(.*?)\]', schema_targets_str, re.IGNORECASE)
+        if columns_match:
+            columns_str = columns_match.group(1)
+            columns = re.findall(r'["\']([^"\']+)["\']', columns_str)
+            result["columns"] = columns
+
+        # Extract detail level
+        detail_match = re.search(r'["\']?detail_level["\']?\s*:\s*["\']([^"\']+)["\']', schema_targets_str, re.IGNORECASE)
+        if detail_match:
+            result["detail_level"] = detail_match.group(1)
+
+    except Exception as e:
+        logger.error(f"Error in manual schema targets parsing: {str(e)}")
 
     return result
 
