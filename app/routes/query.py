@@ -80,8 +80,11 @@ async def generate_query(request: QueryRequest):
         llm = llm_provider.get_model(model)
 
         use_unified = settings.USE_UNIFIED_ANALYZER
-        query_generator = QueryGenerator(llm, use_unified)
-        
+        query_generator = QueryGenerator(
+            llm=llm,
+            use_unified_analyzer=settings.USE_ENHANCED_ANALYZER  # Backward compatibility
+        )
+
         # Generate result
         execution_id = str(uuid.uuid4())
         result, thinking = await query_generator.generate(

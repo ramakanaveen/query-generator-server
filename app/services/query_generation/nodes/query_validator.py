@@ -1,13 +1,11 @@
-# app/services/query_generation/nodes/query_validator.py
+# app/services/query_generation/nodes/query_validator.py - Enhanced Version
+
 import re
 from typing import List, Dict, Any
-
 from langchain.prompts import ChatPromptTemplate
-
 from app.core.logging import logger
 from app.core.profiling import timeit
 from app.services.query_generation.prompts.validation_prompts import KDB_VALIDATION_PROMPT, SQL_VALIDATION_PROMPT
-
 
 class ValidationResult:
     """Class to hold validation results with detailed feedback."""
@@ -57,7 +55,6 @@ class ValidationResult:
         result.corrected_query = data.get("corrected_query")
         return result
 
-
 class QueryValidator:
     """Base class for query validators."""
 
@@ -67,16 +64,8 @@ class QueryValidator:
     async def validate(self, query: str, schema: Dict[str, Any]) -> ValidationResult:
         """
         Validate a query against a schema.
-
-        Args:
-            query: The query to validate
-            schema: The schema to validate against
-
-        Returns:
-            ValidationResult with detailed feedback
         """
         raise NotImplementedError("Subclasses must implement validate")
-
 
 class KDBValidator(QueryValidator):
     """Validator for KDB+/q queries."""
@@ -139,7 +128,6 @@ class KDBValidator(QueryValidator):
             return
 
         # Step 1: Identify variable assignments to exclude from table validation
-        # Pattern matches: variableName: select ...
         assignment_pattern = r'(\w+)\s*:\s*select'
         assigned_variables = re.findall(assignment_pattern, query, re.IGNORECASE)
 
@@ -282,46 +270,24 @@ class SQLValidator(QueryValidator):
 
     async def validate(self, query: str, schema: Dict[str, Any]) -> ValidationResult:
         """Validate an SQL query."""
-        # This would be implemented similarly to KDBValidator but with SQL-specific rules
         result = ValidationResult()
-
-        # For now, just add a placeholder suggestion
         result.add_improvement_suggestion("SQL validation is currently a placeholder and should be implemented with SQL-specific rules")
-
         return result
-
 
 class LLMValidator:
     """LLM-powered validator for queries using advanced language models."""
 
     def __init__(self, llm):
-        """
-        Initialize with a language model.
-
-        Args:
-            llm: Language model from LLMProvider
-        """
+        """Initialize with a language model."""
         self.llm = llm
         self.validation_prompts = {
             "kdb": KDB_VALIDATION_PROMPT,
             "sql": SQL_VALIDATION_PROMPT,
-            # Add more DB types here
         }
 
     async def validate(self, query: str, generated_query: str,
                        database_type: str, schema: Dict[str, Any]) -> ValidationResult:
-        """
-        Validate a query using LLM.
-
-        Args:
-            query: The original natural language query
-            generated_query: The generated database query
-            database_type: The type of database (kdb, sql, etc.)
-            schema: The schema to validate against
-
-        Returns:
-            ValidationResult with detailed feedback
-        """
+        """Validate a query using LLM."""
         try:
             # Select appropriate prompt based on database type
             prompt_template = self.validation_prompts.get(
@@ -356,6 +322,7 @@ class LLMValidator:
             result = ValidationResult()
             result.add_critical_error(f"LLM validation error: {str(e)}")
             return result
+
     def _parse_json_response(self, response_content: str) -> dict:
         """Parse JSON response with robust error handling."""
         import json
@@ -443,17 +410,156 @@ class LLMValidator:
 
         return "\n".join(formatted_schema)
 
+# NEW: Enhanced escalation detection functions
+async def detect_escalation_triggers_llm(state, llm):
+    """
+    Use LLM to intelligently analyze validation errors and determine if escalation is needed.
+    This replaces the rule-based escalation detection with intelligent analysis.
+    """
+    try:
+        validation_errors = state.validation_errors
+        if not validation_errors:
+            return False, None
+
+        # Create LLM prompt for escalation analysis
+        escalation_prompt = f"""
+You are analyzing validation errors to determine if complexity escalation is needed.
+
+ORIGINAL USER QUERY: {state.query}
+GENERATED QUERY: {getattr(state, 'generated_query', 'Not available')}
+CURRENT COMPLEXITY: {getattr(state, 'query_complexity', 'SINGLE_LINE')}
+VALIDATION ERRORS: {format_validation_errors_for_analysis(validation_errors)}
+CURRENT ESCALATION COUNT: {getattr(state, 'escalation_count', 0)}
+
+Analyze if this needs complexity escalation or other action:
+
+1. **ESCALATION_NEEDED**: Should we escalate complexity?
+   - true: If errors suggest the query is too complex for current approach
+   - false: If errors are fixable without complexity change
+
+2. **ESCALATION_TYPE**: What type of escalation?
+   - complexity_escalation: Move from SINGLE_LINE → MULTI_LINE → COMPLEX_ANALYSIS
+   - schema_reselection: Try different tables/schemas
+   - syntax_fix: Fix syntax while keeping complexity
+   - logic_revision: Change approach while keeping complexity
+
+3. **REASONING**: Why this decision?
+
+4. **SPECIFIC_GUIDANCE**: What should be done?
+
+Format as:
+ESCALATION_NEEDED: [true/false]
+ESCALATION_TYPE: [complexity_escalation/schema_reselection/syntax_fix/logic_revision]
+REASONING: [detailed explanation]
+SPECIFIC_GUIDANCE: [specific instructions for next step]
+"""
+
+        response = await llm.ainvoke(escalation_prompt)
+        analysis = parse_escalation_analysis(response.content.strip())
+
+        needs_escalation = analysis.get("escalation_needed", False)
+        escalation_type = analysis.get("escalation_type", "complexity_escalation")
+        reasoning = analysis.get("reasoning", "LLM analysis")
+        guidance = analysis.get("specific_guidance", "")
+
+        # Update state based on LLM analysis
+        if needs_escalation:
+            state.needs_reanalysis = True
+            state.escalation_reason = reasoning
+
+            # Set specific guidance based on escalation type
+            if escalation_type == "complexity_escalation":
+                state.recommended_action = "escalate_complexity"
+            elif escalation_type == "schema_reselection":
+                state.needs_schema_reselection = True
+                state.recommended_action = "fix_schema_references"
+            elif escalation_type == "syntax_fix":
+                state.recommended_action = "fix_syntax_keep_complexity"
+            elif escalation_type == "logic_revision":
+                state.recommended_action = "revise_execution_plan"
+
+            state.specific_guidance = guidance
+
+        return needs_escalation, escalation_type
+
+    except Exception as e:
+        logger.error(f"Error in LLM escalation analysis: {str(e)}")
+        # Fallback to simple heuristic
+        return should_trigger_simple_escalation(state), "complexity_escalation"
+
+def parse_escalation_analysis(response_text: str) -> Dict[str, Any]:
+    """Parse the LLM escalation analysis response."""
+    result = {
+        "escalation_needed": False,
+        "escalation_type": "complexity_escalation",
+        "reasoning": "",
+        "specific_guidance": ""
+    }
+
+    try:
+        lines = response_text.split('\n')
+        for line in lines:
+            line = line.strip()
+
+            if line.startswith('ESCALATION_NEEDED:'):
+                needed = line.replace('ESCALATION_NEEDED:', '').strip().lower()
+                result["escalation_needed"] = needed in ["true", "yes", "1"]
+
+            elif line.startswith('ESCALATION_TYPE:'):
+                result["escalation_type"] = line.replace('ESCALATION_TYPE:', '').strip()
+
+            elif line.startswith('REASONING:'):
+                result["reasoning"] = line.replace('REASONING:', '').strip()
+
+            elif line.startswith('SPECIFIC_GUIDANCE:'):
+                result["specific_guidance"] = line.replace('SPECIFIC_GUIDANCE:', '').strip()
+
+    except Exception as e:
+        logger.error(f"Error parsing escalation analysis: {str(e)}")
+
+    return result
+
+def format_validation_errors_for_analysis(validation_errors):
+    """Format validation errors for LLM analysis."""
+    if not validation_errors:
+        return "No validation errors"
+
+    if isinstance(validation_errors, list):
+        return "\n".join([f"- {str(error)}" for error in validation_errors])
+    else:
+        return str(validation_errors)
+
+def should_trigger_simple_escalation(state):
+    """Simple fallback escalation detection for when LLM analysis fails."""
+    validation_errors = state.validation_errors
+    if not validation_errors:
+        return False
+
+    # Convert errors to strings for analysis
+    error_text = " ".join([str(error) for error in validation_errors])
+    error_text_lower = error_text.lower()
+
+    # Simple triggers for escalation
+    escalation_triggers = [
+        "too complex",
+        "intermediate steps",
+        "multi-line",
+        "complexity",
+        "step by step"
+    ]
+
+    return any(trigger in error_text_lower for trigger in escalation_triggers)
 
 @timeit
 async def validate_query(state):
     """
-    Validate the generated query using both rule-based and LLM validation.
+    Enhanced query validation with LLM-driven escalation detection.
 
-    Args:
-        state: The current state of the workflow
-
-    Returns:
-        Updated state with validation result
+    NEW FEATURES:
+    - LLM analyzes validation feedback intelligently
+    - Smart escalation trigger detection
+    - Specific guidance for regeneration
+    - Bounded escalation loops
     """
     try:
         generated_query = state.generated_query
@@ -463,7 +569,7 @@ async def validate_query(state):
         llm = state.llm
 
         # Add thinking step
-        state.thinking.append("Validating generated query...")
+        state.thinking.append("🔍 Validating generated query with enhanced analysis...")
 
         # Initialize validation result and errors list
         validation_result = True
@@ -539,6 +645,7 @@ async def validate_query(state):
             # Store corrected query for potential use by the refiner
             state.llm_corrected_query = llm_validation.corrected_query
 
+        # Convert complex objects to strings
         def convert_to_string(item):
             if isinstance(item, dict):
                 parts = []
@@ -550,6 +657,7 @@ async def validate_query(state):
                     parts.append(f"Suggestion: {item['suggestion']}")
                 return " | ".join(parts) if parts else str(item)
             return str(item)
+
         validation_errors = [convert_to_string(error) for error in validation_errors]
         detailed_feedback = [convert_to_string(feedback) for feedback in detailed_feedback]
 
@@ -562,17 +670,36 @@ async def validate_query(state):
             "llm_validation": llm_validation.to_dict()
         }
 
+        # 3. NEW: Enhanced escalation detection using LLM
+        if not validation_result:
+            state.thinking.append("🤖 Analyzing validation failures with LLM for intelligent escalation...")
+
+            # Use LLM to determine if escalation is needed
+            needs_escalation, escalation_type = await detect_escalation_triggers_llm(state, llm)
+
+            if needs_escalation:
+                state.thinking.append(f"⬆️ LLM recommends escalation: {escalation_type}")
+                state.thinking.append(f"📋 Reason: {getattr(state, 'escalation_reason', 'LLM analysis')}")
+
+                # Log the specific guidance if available
+                if hasattr(state, 'specific_guidance') and state.specific_guidance:
+                    state.thinking.append(f"🎯 Guidance: {state.specific_guidance}")
+            else:
+                state.thinking.append("🔧 LLM suggests fixing without escalation")
+
+        # Log final validation results
         if validation_result:
-            state.thinking.append("Query validation passed")
+            state.thinking.append("✅ Query validation passed")
         else:
-            state.thinking.append(f"Query validation failed: {', '.join(map(str, validation_errors))}")
-            state.thinking.append("Detailed feedback:\n" + "\n".join(detailed_feedback))
+            state.thinking.append(f"❌ Query validation failed: {', '.join(map(str, validation_errors))}")
+            if detailed_feedback:
+                state.thinking.append("📝 Detailed feedback available for analysis")
 
         return state
 
     except Exception as e:
-        logger.error(f"Error in query validator: {str(e)}", exc_info=True)
-        state.thinking.append(f"Error validating query: {str(e)}")
+        logger.error(f"Error in enhanced query validator: {str(e)}", exc_info=True)
+        state.thinking.append(f"❌ Error validating query: {str(e)}")
         # Fail validation on error
         state.validation_result = False
         state.validation_errors = [str(e)]

@@ -99,18 +99,18 @@ async def retry_query(request: RetryRequest):
 
         # UPDATED: Generate using enhanced workflow with retry parameters
         execution_id = str(uuid.uuid4())
+        # Generate query using enhanced retry workflow
         result, thinking = await query_generator.generate(
             query=request.original_query,
             database_type=request.database_type,
             conversation_id=request.conversation_id,
-            conversation_history=conversation_history,
-            user_id=getattr(request, 'user_id', None),  # If user_id is added to schema
-            # NEW: Retry-specific parameters
+            conversation_history=request.conversation_history,
+            user_id=getattr(request, 'user_id', None),
+            # Enhanced retry parameters
             is_retry=True,
             original_generated_query=request.original_generated_query,
-            user_feedback=request.feedback
+            user_feedback=request.user_feedback
         )
-
         # Extract the generated query from result
         generated_query = None
         if isinstance(result, dict):

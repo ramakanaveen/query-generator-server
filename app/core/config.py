@@ -65,6 +65,21 @@ class Settings(BaseSettings):
     # unified analyser
     USE_UNIFIED_ANALYZER: bool = os.getenv("USE_UNIFIED_ANALYZER", "False").lower() in ("true", "1", "t")
 
+    # NEW: Enhanced architecture configuration
+    USE_ENHANCED_ANALYZER: bool = os.getenv("USE_ENHANCED_ANALYZER", "True").lower() in ("true", "1", "yes")
+
+    # Enhanced architecture tuning parameters
+    MAX_ESCALATIONS: int = int(os.getenv("MAX_ESCALATIONS", "2"))
+    MAX_REFINEMENTS: int = int(os.getenv("MAX_REFINEMENTS", "2"))
+
+    # LLM analysis configuration
+    INTENT_CLASSIFICATION_CONFIDENCE_THRESHOLD: float = float(os.getenv("INTENT_CONFIDENCE_THRESHOLD", "0.7"))
+    COMPLEXITY_ANALYSIS_TIMEOUT: int = int(os.getenv("COMPLEXITY_ANALYSIS_TIMEOUT", "30"))
+
+    # Escalation and retry configuration
+    ENABLE_LLM_ESCALATION_DETECTION: bool = os.getenv("ENABLE_LLM_ESCALATION", "True").lower() in ("true", "1", "yes")
+    ENABLE_CONVERSATION_CONTEXT: bool = os.getenv("ENABLE_CONVERSATION_CONTEXT", "True").lower() in ("true", "1", "yes")
+
 
     class Config:
         case_sensitive = True

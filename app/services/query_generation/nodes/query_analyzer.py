@@ -5,7 +5,7 @@ from langchain.prompts import ChatPromptTemplate
 
 from app.core.profiling import timeit
 from app.services.query_generation.prompts.anlyzer_prompts import ANALYZER_PROMPT_TEMPLATE
-from app.services.query_generation.prompts.intent_classifier_prompts import INTENT_CLASSIFIER_PROMPT_TEMPLATE
+from app.services.query_generation.prompts.intent_classifier_prompts import INTENT_CLASSIFICATION_PROMPT
 from app.services.query_generation.prompts.retry_prompts import FEEDBACK_ANALYSIS_PROMPT
 from app.core.logging import logger
 
@@ -444,7 +444,7 @@ async def classify_intent_with_llm(query, directives, llm):
     """
     try:
         # Create a prompt for classification
-        prompt = ChatPromptTemplate.from_template(INTENT_CLASSIFIER_PROMPT_TEMPLATE)
+        prompt = ChatPromptTemplate.from_template(INTENT_CLASSIFICATION_PROMPT)
         
         # Get LLM classification
         chain = prompt | llm
