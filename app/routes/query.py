@@ -1,3 +1,5 @@
+# app/routes/query.py
+
 import time
 from functools import lru_cache
 import math
@@ -7,10 +9,11 @@ import uuid
 import json
 from typing import Dict, Any, List
 
+from app.core.config import settings
 from app.schemas.query import QueryRequest, QueryResponse, ExecutionRequest, ExecutionResponse
 from app.services.llm_provider import LLMProvider
 from app.services.conversation_manager import ConversationManager
-from app.services.query_generator import QueryGenerator
+from app.services.query_generator import QueryGenerator  # Already enhanced
 from app.services.database_connector import DatabaseConnector
 from app.core.logging import logger
 
@@ -54,6 +57,7 @@ def get_database_connector():
 async def generate_query(request: QueryRequest):
     """
     Generate a database query or other content from natural language.
+    Enhanced with conversation essence and user context support.
     """
     start_time = time.time()
     try:
@@ -63,28 +67,43 @@ async def generate_query(request: QueryRequest):
         database_type = request.database_type
         conversation_id = request.conversation_id
         conversation_history = request.conversation_history
-        
+
+        # Extract user_id if available (you may need to add this to QueryRequest schema)
+        user_id = getattr(request, 'user_id', None)
+
+        logger.info(f"📥 Query request: {query}")
+        if conversation_id:
+            logger.info(f"📚 Conversation ID: {conversation_id}")
+
         # Initialize services
         llm_provider = LLMProvider()
         llm = llm_provider.get_model(model)
-        
-        # Initialize query generator
-        query_generator = QueryGenerator(llm)
-        
+
+        use_unified = settings.USE_UNIFIED_ANALYZER
+        query_generator = QueryGenerator(
+            llm=llm,
+            use_unified_analyzer=settings.USE_ENHANCED_ANALYZER  # Backward compatibility
+        )
+
         # Generate result
         execution_id = str(uuid.uuid4())
         result, thinking = await query_generator.generate(
-            query,
-            database_type,
-            conversation_id,
-            conversation_history
+            query=query,
+            database_type=database_type,
+            conversation_id=conversation_id,
+            conversation_history=conversation_history,
+            user_id=user_id,
+            # These are for retry only (defaults to False/None)
+            is_retry=False,
+            original_generated_query=None,
+            user_feedback=None
         )
-        
+
         # Determine response type and content
         response_type = "query"
         generated_query = None
         generated_content = None
-        
+
         if isinstance(result, dict):
             # New format with intent type
             response_type = result.get("intent_type", "query")
@@ -94,8 +113,52 @@ async def generate_query(request: QueryRequest):
             # Legacy format (string query)
             generated_query = result
             response_type = "query"
+
+        # ENHANCED: Store query in conversation if conversation_id provided
+        if conversation_id and generated_query:
+            try:
+                conversation_manager = ConversationManager()
+
+                # Add user message
+                await conversation_manager.add_message(
+                    conversation_id,
+                    {
+                        "id": str(uuid.uuid4()),
+                        "role": "user",
+                        "content": query,
+                        "metadata": {
+                            "execution_id": execution_id,
+                            "model": model,
+                            "database_type": database_type
+                        }
+                    }
+                )
+
+                # Add assistant response
+                await conversation_manager.add_message(
+                    conversation_id,
+                    {
+                        "id": str(uuid.uuid4()),
+                        "role": "assistant",
+                        "content": generated_query,
+                        "metadata": {
+                            "execution_id": execution_id,
+                            "response_type": response_type,
+                            "thinking_steps": len(thinking)
+                        }
+                    }
+                )
+
+                logger.info(f"💾 Stored query interaction in conversation {conversation_id}")
+
+            except Exception as e:
+                logger.warning(f"Could not store conversation: {str(e)}")
+                # Don't fail the request if conversation storage fails
+
         total_time = time.time() - start_time
         logger.info(f"⏱️ Total query generation time: {total_time:.4f} seconds")
+        logger.info(f"✅ Query generated successfully with {len(thinking)} thinking steps")
+
         return QueryResponse(
             generated_query=generated_query,
             generated_content=generated_content,
@@ -103,14 +166,13 @@ async def generate_query(request: QueryRequest):
             execution_id=execution_id,
             thinking=thinking
         )
-    
+
     except ValueError as e:
         logger.error(f"ValueError in generate_query endpoint: {str(e)}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Exception in generate_query endpoint: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Query generation failed: {str(e)}")
-
 
 @router.post("/execute", response_model=ExecutionResponse)
 async def execute_query(

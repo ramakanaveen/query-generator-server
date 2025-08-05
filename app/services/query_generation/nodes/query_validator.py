@@ -1,80 +1,11 @@
-# app/services/query_generation/nodes/query_validator.py
-import re
-from typing import Dict, Any, List, Tuple
-from langchain.prompts import ChatPromptTemplate
+# app/services/query_generation/nodes/query_validator.py - Enhanced Version
 
+import re
+from typing import List, Dict, Any
+from langchain.prompts import ChatPromptTemplate
 from app.core.logging import logger
 from app.core.profiling import timeit
-
-# LLM validation prompts for different database types
-KDB_VALIDATION_PROMPT = """
-You are an expert KDB+/q validator analyzing a generated query. Your goal is to provide detailed feedback to help improve the query.
-
-Database Schema:
-{schema}
-
-Follow these steps to analyze the query:
-
-1. Syntax Check: Identify any KDB+/q syntax errors
-2. Schema Validation: Verify tables and columns exist in the schema
-3. Semantic Analysis: Check if the query logic matches the user's intent
-4. KDB Best Practices: Evaluate if the query follows KDB+/q idioms and best practices
-
-Important KDB+/q considerations:
-- KDB uses backticks for symbols: `symbol
-- Tables are accessed directly: select from table (not SELECT * FROM table)
-- Sorting uses xasc/xdesc: `column xdesc tableName OR select ... | xdesc `column
-- Date comparisons often use .z.d (today), .z.d-1 (yesterday)
-- For top N: select[N] or top N, not LIMIT
-
-Provide a JSON-formatted response with these fields:
-- valid: true/false
-- critical_errors: [] (syntax or schema errors that prevent execution)
-- logical_issues: [] (problems with query logic that would return incorrect results)
-- improvement_suggestions: [] (ideas for better implementations)
-- corrected_query: (optional improved version if available)
-
-Based on the above information provide detailed feedback to help improve the query
-Original User Query: {query}
-Generated KDB Query: {generated_query}
-
-Be specific with line numbers, error locations, and suggest corrections.
-"""
-
-SQL_VALIDATION_PROMPT = """
-You are an expert SQL validator analyzing a generated query. Your goal is to provide detailed feedback to help improve the query.
-
-Original User Query: {query}
-Generated SQL Query: {generated_query}
-Database Schema:
-{schema}
-
-Follow these steps to analyze the query:
-
-1. Syntax Check: Identify any SQL syntax errors
-2. Schema Validation: Verify tables and columns exist in the schema
-3. Semantic Analysis: Check if the query logic matches the user's intent
-4. SQL Best Practices: Evaluate if the query follows SQL idioms and best practices
-
-Important SQL considerations:
-- Table and column names should match schema exactly (case sensitivity depends on engine)
-- JOIN conditions should match appropriate keys
-- WHERE clauses should use appropriate operators
-- Proper use of GROUP BY, HAVING, ORDER BY
-- Watch for function usage and aggregation logic
-
-Provide a JSON-formatted response with these fields:
-- valid: true/false
-- critical_errors: [] (syntax or schema errors that prevent execution)
-- logical_issues: [] (problems with query logic that would return incorrect results)
-- improvement_suggestions: [] (ideas for better implementations)
-- corrected_query: (optional improved version if available)
-
-Be specific with line numbers, error locations, and suggest corrections.
-"""
-
-# Add more prompts for other database types here
-
+from app.services.query_generation.prompts.validation_prompts import KDB_VALIDATION_PROMPT, SQL_VALIDATION_PROMPT
 
 class ValidationResult:
     """Class to hold validation results with detailed feedback."""
@@ -124,7 +55,6 @@ class ValidationResult:
         result.corrected_query = data.get("corrected_query")
         return result
 
-
 class QueryValidator:
     """Base class for query validators."""
 
@@ -134,16 +64,8 @@ class QueryValidator:
     async def validate(self, query: str, schema: Dict[str, Any]) -> ValidationResult:
         """
         Validate a query against a schema.
-
-        Args:
-            query: The query to validate
-            schema: The schema to validate against
-
-        Returns:
-            ValidationResult with detailed feedback
         """
         raise NotImplementedError("Subclasses must implement validate")
-
 
 class KDBValidator(QueryValidator):
     """Validator for KDB+/q queries."""
@@ -200,48 +122,145 @@ class KDBValidator(QueryValidator):
                 result.add_critical_error(error_msg)
 
     def _validate_schema(self, query: str, schema: Dict[str, Any], result: ValidationResult):
-        """Validate query against schema."""
+        """Validate query against schema, understanding KDB+/q variable assignments."""
         # Skip if schema is not provided or query already has critical errors
         if not schema or result.critical_errors:
             return
 
-        # Extract table names from the query using regex
-        # This is a simplified approach; a proper parser would be better
+        # Step 1: Identify variable assignments to exclude from table validation
+        assignment_pattern = r'(\w+)\s*:\s*select'
+        assigned_variables = re.findall(assignment_pattern, query, re.IGNORECASE)
+
+        # Step 2: Extract table names referenced after 'from' or 'join'
         table_pattern = r'(?:from|join)\s+(\w+)'
         referenced_tables = re.findall(table_pattern, query, re.IGNORECASE)
 
-        # Extract column references (simplified approach)
-        column_pattern = r'(?:select|where|by|asc|desc)\s+([^,;\s]+)'
-        potential_columns = re.findall(column_pattern, query, re.IGNORECASE)
+        # Step 3: Filter out assigned variables - they are NOT schema tables
+        actual_schema_tables = [table for table in referenced_tables
+                                if table not in assigned_variables]
 
-        # Clean up potential columns (remove backticks, etc.)
-        referenced_columns = []
-        for col in potential_columns:
-            col = col.strip('`')
-            if col and not col.startswith('.') and not col.isdigit():
-                referenced_columns.append(col)
-
-        # Check if referenced tables exist in schema
+        # Step 4: Check if actual schema tables exist in the provided schema
         schema_tables = schema.get("tables", {})
-        for table in referenced_tables:
+        for table in actual_schema_tables:
             if table not in schema_tables:
-                result.add_critical_error(f"Table '{table}' not found in schema. Available tables: {', '.join(schema_tables.keys())}")
+                available_tables = ', '.join(schema_tables.keys())
+                result.add_critical_error(
+                    f"Table '{table}' not found in schema. Available tables: {available_tables}"
+                )
 
-        # For each referenced table that exists, check if referenced columns exist
-        for table in referenced_tables:
-            if table in schema_tables:
-                table_schema = schema_tables[table]
+        # Step 5: Validate column references for existing tables
+        self._validate_columns(query, schema, result, actual_schema_tables, assigned_variables)
 
-                # Get schema columns
-                schema_columns = []
-                if isinstance(table_schema, dict) and "columns" in table_schema:
-                    schema_columns = [col.get("name") for col in table_schema["columns"] if isinstance(col, dict) and "name" in col]
+    def _validate_columns(self, query: str, schema: Dict[str, Any], result: ValidationResult,
+                          actual_tables: List[str], assigned_variables: List[str]):
+        """Validate column references, excluding KDB+ built-in functions."""
 
-                # Check if columns exist in this table
-                for col in referenced_columns:
-                    if col not in schema_columns and col != 'i':  # 'i' is a special KDB/Q column
-                        result.add_logical_issue(f"Column '{col}' might not exist in table '{table}'. Available columns: {', '.join(schema_columns)}")
+        # KDB+ built-in functions that are NOT column names
+        builtin_functions = {
+            'max', 'min', 'sum', 'avg', 'count', 'dev', 'var', 'first', 'last',
+            'mavg', 'msum', 'mcount', 'mdev', 'med', 'distinct', 'reverse',
+            'hh', 'mm', 'ss', 'date', 'time'  # time extraction functions
+        }
 
+        # KDB+ time constants and patterns that are NOT column names
+        time_patterns = {
+            r'^\d+[hmsd]$',           # 1h, 30m, 45s, 2d
+            r'^0D\d{2}:\d{2}:\d{2}$', # 0D01:00:00, 0D00:30:00
+            r'^\.z\.[dtpz]',          # .z.d, .z.t, .z.p, .z.z
+            r'^\d{4}\.\d{2}\.\d{2}',  # 2023.10.26 (date literals)
+        }
+
+        # KDB+ operators and keywords that are NOT column names
+        kdb_keywords = {
+            'xbar', 'within', 'xdesc', 'xasc', 'by', 'from', 'where', 'select',
+            'update', 'delete', 'insert', 'upsert', 'and', 'or', 'not'
+        }
+
+        def is_time_constant(token: str) -> bool:
+            """Check if token is a KDB+ time constant."""
+            for pattern in time_patterns:
+                if re.match(pattern, token):
+                    return True
+            return False
+
+        def is_likely_column(token: str) -> bool:
+            """Determine if token is likely a column name vs KDB+ syntax."""
+            token = token.strip('`').strip()
+
+            # Skip if it's a built-in function
+            if token.lower() in builtin_functions:
+                return False
+
+            # Skip if it's a time constant
+            if is_time_constant(token):
+                return False
+
+            # Skip if it's a KDB+ keyword
+            if token.lower() in kdb_keywords:
+                return False
+
+            # Skip if it's an assigned variable
+            if token in assigned_variables:
+                return False
+
+            # Skip mathematical expressions
+            if any(op in token for op in ['+', '-', '*', '/', '%', '=', '<', '>', '!', '&', '|']):
+                return False
+
+            # Skip complex expressions with parentheses or brackets
+            if any(char in token for char in ['(', ')', '[', ']', '{', '}']):
+                return False
+
+            # Skip if it starts with a number (likely a literal)
+            if token and token[0].isdigit():
+                return False
+
+            # Skip very short tokens (likely operators)
+            if len(token) <= 1:
+                return False
+
+            # If it passes all checks, it might be a column
+            return True
+
+        # Extract potential column references with more precise patterns
+        column_patterns = [
+            r'select\s+([^,\s]+)(?:\s*,\s*([^,\s]+))*',  # select col1, col2
+            r'where\s+([a-zA-Z_][a-zA-Z0-9_]*)',         # where column_name
+            r'update\s+([a-zA-Z_][a-zA-Z0-9_]*):',       # update col:
+        ]
+
+        potential_columns = []
+        for pattern in column_patterns:
+            matches = re.findall(pattern, query, re.IGNORECASE)
+            for match in matches:
+                if isinstance(match, tuple):
+                    potential_columns.extend([m for m in match if m])
+                else:
+                    potential_columns.append(match)
+
+        # Validate only tokens that are likely to be actual columns
+        for col_expr in potential_columns:
+            if is_likely_column(col_expr):
+                col_name = col_expr.strip('`').strip()
+
+                # Check if column exists in any of the actual schema tables
+                column_found = False
+                for table_name in actual_tables:
+                    if table_name in schema.get("tables", {}):
+                        table_schema = schema["tables"][table_name]
+                        if isinstance(table_schema, dict) and "columns" in table_schema:
+                            table_columns = [c.get("name") for c in table_schema["columns"]
+                                             if isinstance(c, dict) and "name" in c]
+                            if col_name in table_columns:
+                                column_found = True
+                                break
+
+                # Only flag as issue if column not found and we have tables to check against
+                if not column_found and actual_tables:
+                    result.add_logical_issue(
+                        f"Column '{col_name}' might not exist in the referenced tables. "
+                        f"Please verify column names in your schema."
+                    )
 
 class SQLValidator(QueryValidator):
     """Validator for SQL queries."""
@@ -251,46 +270,24 @@ class SQLValidator(QueryValidator):
 
     async def validate(self, query: str, schema: Dict[str, Any]) -> ValidationResult:
         """Validate an SQL query."""
-        # This would be implemented similarly to KDBValidator but with SQL-specific rules
         result = ValidationResult()
-
-        # For now, just add a placeholder suggestion
         result.add_improvement_suggestion("SQL validation is currently a placeholder and should be implemented with SQL-specific rules")
-
         return result
-
 
 class LLMValidator:
     """LLM-powered validator for queries using advanced language models."""
 
     def __init__(self, llm):
-        """
-        Initialize with a language model.
-
-        Args:
-            llm: Language model from LLMProvider
-        """
+        """Initialize with a language model."""
         self.llm = llm
         self.validation_prompts = {
             "kdb": KDB_VALIDATION_PROMPT,
             "sql": SQL_VALIDATION_PROMPT,
-            # Add more DB types here
         }
 
     async def validate(self, query: str, generated_query: str,
                        database_type: str, schema: Dict[str, Any]) -> ValidationResult:
-        """
-        Validate a query using LLM.
-
-        Args:
-            query: The original natural language query
-            generated_query: The generated database query
-            database_type: The type of database (kdb, sql, etc.)
-            schema: The schema to validate against
-
-        Returns:
-            ValidationResult with detailed feedback
-        """
+        """Validate a query using LLM."""
         try:
             # Select appropriate prompt based on database type
             prompt_template = self.validation_prompts.get(
@@ -312,25 +309,10 @@ class LLMValidator:
                 "schema": schema_str
             })
 
-            # Parse JSON response
-            import json
-            import re
+            # Parse JSON with robust error handling
+            validation_data = self._parse_json_response(response.content)
 
-            # Try to extract JSON from the response
-            json_match = re.search(r'```json\n(.*?)\n```', response.content, re.DOTALL)
-            if json_match:
-                validation_data = json.loads(json_match.group(1))
-            else:
-                # Try without code block markers
-                try:
-                    validation_data = json.loads(response.content)
-                except json.JSONDecodeError:
-                    # If we can't parse JSON, create a basic result with the raw response
-                    result = ValidationResult()
-                    result.add_improvement_suggestion(f"LLM analysis: {response.content}")
-                    return result
-
-            # Create ValidationResult from the parsed data
+            # Convert to ValidationResult
             return ValidationResult.from_dict(validation_data)
 
         except Exception as e:
@@ -340,6 +322,62 @@ class LLMValidator:
             result = ValidationResult()
             result.add_critical_error(f"LLM validation error: {str(e)}")
             return result
+
+    def _parse_json_response(self, response_content: str) -> dict:
+        """Parse JSON response with robust error handling."""
+        import json
+        import re
+
+        try:
+            # Try to extract JSON from code blocks first
+            json_match = re.search(r'```json\n(.*?)\n```', response_content, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                # Try to find JSON without code blocks
+                json_match = re.search(r'(\{.*\})', response_content, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(1)
+                else:
+                    json_str = response_content
+
+            # First attempt: parse as-is
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                # Second attempt: fix common escape issues
+                # Fix unescaped backticks
+                fixed_json = re.sub(r'(?<!\\)`', r'\\`', json_str)
+                # Fix unescaped single backslashes
+                fixed_json = re.sub(r'(?<!\\)\\(?![\\"`/bfnrt])', r'\\\\', fixed_json)
+
+                try:
+                    return json.loads(fixed_json)
+                except json.JSONDecodeError:
+                    # Third attempt: manual extraction
+                    return self._extract_validation_manually(response_content)
+
+        except Exception as e:
+            logger.error(f"JSON parsing failed: {str(e)}")
+            return self._extract_validation_manually(response_content)
+
+    def _extract_validation_manually(self, content: str) -> dict:
+        """Manually extract validation info when JSON parsing fails."""
+        result = {
+            "valid": True,
+            "critical_errors": [],
+            "logical_issues": [],
+            "improvement_suggestions": [],
+            "corrected_query": None
+        }
+
+        # Look for validation status
+        if re.search(r'"valid":\s*false', content, re.IGNORECASE):
+            result["valid"] = False
+
+        # Simple fallback extraction could be enhanced
+        logger.warning("Used manual JSON extraction due to parsing issues")
+        return result
 
     def _format_schema_for_prompt(self, schema: Dict[str, Any]) -> str:
         """Format schema information for the LLM prompt."""
@@ -372,17 +410,156 @@ class LLMValidator:
 
         return "\n".join(formatted_schema)
 
+# NEW: Enhanced escalation detection functions
+async def detect_escalation_triggers_llm(state, llm):
+    """
+    Use LLM to intelligently analyze validation errors and determine if escalation is needed.
+    This replaces the rule-based escalation detection with intelligent analysis.
+    """
+    try:
+        validation_errors = state.validation_errors
+        if not validation_errors:
+            return False, None
+
+        # Create LLM prompt for escalation analysis
+        escalation_prompt = f"""
+You are analyzing validation errors to determine if complexity escalation is needed.
+
+ORIGINAL USER QUERY: {state.query}
+GENERATED QUERY: {getattr(state, 'generated_query', 'Not available')}
+CURRENT COMPLEXITY: {getattr(state, 'query_complexity', 'SINGLE_LINE')}
+VALIDATION ERRORS: {format_validation_errors_for_analysis(validation_errors)}
+CURRENT ESCALATION COUNT: {getattr(state, 'escalation_count', 0)}
+
+Analyze if this needs complexity escalation or other action:
+
+1. **ESCALATION_NEEDED**: Should we escalate complexity?
+   - true: If errors suggest the query is too complex for current approach
+   - false: If errors are fixable without complexity change
+
+2. **ESCALATION_TYPE**: What type of escalation?
+   - complexity_escalation: Move from SINGLE_LINE → MULTI_LINE → COMPLEX_ANALYSIS
+   - schema_reselection: Try different tables/schemas
+   - syntax_fix: Fix syntax while keeping complexity
+   - logic_revision: Change approach while keeping complexity
+
+3. **REASONING**: Why this decision?
+
+4. **SPECIFIC_GUIDANCE**: What should be done?
+
+Format as:
+ESCALATION_NEEDED: [true/false]
+ESCALATION_TYPE: [complexity_escalation/schema_reselection/syntax_fix/logic_revision]
+REASONING: [detailed explanation]
+SPECIFIC_GUIDANCE: [specific instructions for next step]
+"""
+
+        response = await llm.ainvoke(escalation_prompt)
+        analysis = parse_escalation_analysis(response.content.strip())
+
+        needs_escalation = analysis.get("escalation_needed", False)
+        escalation_type = analysis.get("escalation_type", "complexity_escalation")
+        reasoning = analysis.get("reasoning", "LLM analysis")
+        guidance = analysis.get("specific_guidance", "")
+
+        # Update state based on LLM analysis
+        if needs_escalation:
+            state.needs_reanalysis = True
+            state.escalation_reason = reasoning
+
+            # Set specific guidance based on escalation type
+            if escalation_type == "complexity_escalation":
+                state.recommended_action = "escalate_complexity"
+            elif escalation_type == "schema_reselection":
+                state.needs_schema_reselection = True
+                state.recommended_action = "fix_schema_references"
+            elif escalation_type == "syntax_fix":
+                state.recommended_action = "fix_syntax_keep_complexity"
+            elif escalation_type == "logic_revision":
+                state.recommended_action = "revise_execution_plan"
+
+            state.specific_guidance = guidance
+
+        return needs_escalation, escalation_type
+
+    except Exception as e:
+        logger.error(f"Error in LLM escalation analysis: {str(e)}")
+        # Fallback to simple heuristic
+        return should_trigger_simple_escalation(state), "complexity_escalation"
+
+def parse_escalation_analysis(response_text: str) -> Dict[str, Any]:
+    """Parse the LLM escalation analysis response."""
+    result = {
+        "escalation_needed": False,
+        "escalation_type": "complexity_escalation",
+        "reasoning": "",
+        "specific_guidance": ""
+    }
+
+    try:
+        lines = response_text.split('\n')
+        for line in lines:
+            line = line.strip()
+
+            if line.startswith('ESCALATION_NEEDED:'):
+                needed = line.replace('ESCALATION_NEEDED:', '').strip().lower()
+                result["escalation_needed"] = needed in ["true", "yes", "1"]
+
+            elif line.startswith('ESCALATION_TYPE:'):
+                result["escalation_type"] = line.replace('ESCALATION_TYPE:', '').strip()
+
+            elif line.startswith('REASONING:'):
+                result["reasoning"] = line.replace('REASONING:', '').strip()
+
+            elif line.startswith('SPECIFIC_GUIDANCE:'):
+                result["specific_guidance"] = line.replace('SPECIFIC_GUIDANCE:', '').strip()
+
+    except Exception as e:
+        logger.error(f"Error parsing escalation analysis: {str(e)}")
+
+    return result
+
+def format_validation_errors_for_analysis(validation_errors):
+    """Format validation errors for LLM analysis."""
+    if not validation_errors:
+        return "No validation errors"
+
+    if isinstance(validation_errors, list):
+        return "\n".join([f"- {str(error)}" for error in validation_errors])
+    else:
+        return str(validation_errors)
+
+def should_trigger_simple_escalation(state):
+    """Simple fallback escalation detection for when LLM analysis fails."""
+    validation_errors = state.validation_errors
+    if not validation_errors:
+        return False
+
+    # Convert errors to strings for analysis
+    error_text = " ".join([str(error) for error in validation_errors])
+    error_text_lower = error_text.lower()
+
+    # Simple triggers for escalation
+    escalation_triggers = [
+        "too complex",
+        "intermediate steps",
+        "multi-line",
+        "complexity",
+        "step by step"
+    ]
+
+    return any(trigger in error_text_lower for trigger in escalation_triggers)
 
 @timeit
 async def validate_query(state):
     """
-    Validate the generated query using both rule-based and LLM validation.
+    Enhanced query validation with LLM-driven escalation detection.
 
-    Args:
-        state: The current state of the workflow
-
-    Returns:
-        Updated state with validation result
+    NEW FEATURES:
+    - LLM analyzes validation feedback intelligently
+    - Smart escalation trigger detection
+    - Specific guidance for regeneration
+    - Bounded escalation loops
     """
     try:
         generated_query = state.generated_query
@@ -392,7 +569,7 @@ async def validate_query(state):
         llm = state.llm
 
         # Add thinking step
-        state.thinking.append("Validating generated query...")
+        state.thinking.append("🔍 Validating generated query with enhanced analysis...")
 
         # Initialize validation result and errors list
         validation_result = True
@@ -468,6 +645,22 @@ async def validate_query(state):
             # Store corrected query for potential use by the refiner
             state.llm_corrected_query = llm_validation.corrected_query
 
+        # Convert complex objects to strings
+        def convert_to_string(item):
+            if isinstance(item, dict):
+                parts = []
+                if 'location' in item:
+                    parts.append(f"Location: {item['location']}")
+                if 'message' in item:
+                    parts.append(f"Message: {item['message']}")
+                if 'suggestion' in item:
+                    parts.append(f"Suggestion: {item['suggestion']}")
+                return " | ".join(parts) if parts else str(item)
+            return str(item)
+
+        validation_errors = [convert_to_string(error) for error in validation_errors]
+        detailed_feedback = [convert_to_string(feedback) for feedback in detailed_feedback]
+
         # Update state with validation results
         state.validation_result = validation_result
         state.validation_errors = validation_errors
@@ -477,17 +670,36 @@ async def validate_query(state):
             "llm_validation": llm_validation.to_dict()
         }
 
+        # 3. NEW: Enhanced escalation detection using LLM
+        if not validation_result:
+            state.thinking.append("🤖 Analyzing validation failures with LLM for intelligent escalation...")
+
+            # Use LLM to determine if escalation is needed
+            needs_escalation, escalation_type = await detect_escalation_triggers_llm(state, llm)
+
+            if needs_escalation:
+                state.thinking.append(f"⬆️ LLM recommends escalation: {escalation_type}")
+                state.thinking.append(f"📋 Reason: {getattr(state, 'escalation_reason', 'LLM analysis')}")
+
+                # Log the specific guidance if available
+                if hasattr(state, 'specific_guidance') and state.specific_guidance:
+                    state.thinking.append(f"🎯 Guidance: {state.specific_guidance}")
+            else:
+                state.thinking.append("🔧 LLM suggests fixing without escalation")
+
+        # Log final validation results
         if validation_result:
-            state.thinking.append("Query validation passed")
+            state.thinking.append("✅ Query validation passed")
         else:
-            state.thinking.append(f"Query validation failed: {', '.join(validation_errors)}")
-            state.thinking.append("Detailed feedback:\n" + "\n".join(detailed_feedback))
+            state.thinking.append(f"❌ Query validation failed: {', '.join(map(str, validation_errors))}")
+            if detailed_feedback:
+                state.thinking.append("📝 Detailed feedback available for analysis")
 
         return state
 
     except Exception as e:
-        logger.error(f"Error in query validator: {str(e)}", exc_info=True)
-        state.thinking.append(f"Error validating query: {str(e)}")
+        logger.error(f"Error in enhanced query validator: {str(e)}", exc_info=True)
+        state.thinking.append(f"❌ Error validating query: {str(e)}")
         # Fail validation on error
         state.validation_result = False
         state.validation_errors = [str(e)]

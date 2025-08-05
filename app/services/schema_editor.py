@@ -33,7 +33,7 @@ class SchemaEditorService:
                 # Begin transaction
                 async with conn.transaction():
                     # Process tables
-                    tables = schema_json.get("tables", {})
+                    tables = schema_json.get("schema_json", {}).get("tables" , {}) #schema_json.get("tables", {})
 
                     # Get existing tables for this version
                     existing_tables = await conn.fetch(
@@ -105,7 +105,7 @@ class SchemaEditorService:
                         logger.info(f"Deleted table: {table_name} (ID: {existing_table_names[table_name]})")
 
                     # Process examples
-                    examples = schema_json.get("examples", [])
+                    examples = schema_json.get("schema_json", {}).get("examples" , {}) #schema_json.get("examples", [])
 
                     # Delete existing examples for this version
                     await conn.execute(

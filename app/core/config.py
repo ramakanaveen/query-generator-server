@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     GOOGLE_CREDENTIALS_PATH: str = os.getenv("GOOGLE_CREDENTIALS_PATH", "./google-credentials.json")
     GOOGLE_PROJECT_ID: str = os.getenv("GOOGLE_PROJECT_ID", "")
     GOOGLE_LOCATION: str = os.getenv("GOOGLE_LOCATION", "us-central1")
- 
+    GOOGLE_EMBEDDING_LOCATION:str = os.getenv("GOOGLE_EMBEDDING_LOCATION", "us-central1")
     # Google embedding settings
     GOOGLE_EMBEDDING_MODEL_NAME: str = os.getenv("GOOGLE_EMBEDDING_MODEL_NAME", "text-embedding-005")
     GOOGLE_EMBEDDING_ENDPOINT: str = os.getenv("GOOGLE_EMBEDDING_ENDPOINT", "")
@@ -55,7 +55,32 @@ class Settings(BaseSettings):
     
     # Schema directory
     SCHEMAS_DIRECTORY: str = os.getenv("SCHEMAS_DIRECTORY", str(_BASE_DIR / "app" / "schemas"))
-    
+
+    # Langfuse Settings
+    LANGFUSE_PUBLIC_KEY: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
+    LANGFUSE_SECRET_KEY: str = os.getenv("LANGFUSE_SECRET_KEY", "")
+    LANGFUSE_HOST: str = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+    LANGFUSE_ACTIVATE: bool = os.getenv("LANGFUSE_ACTIVATE", "False").lower() in ("true", "1", "t") #
+
+    # unified analyser
+    USE_UNIFIED_ANALYZER: bool = os.getenv("USE_UNIFIED_ANALYZER", "False").lower() in ("true", "1", "t")
+
+    # NEW: Enhanced architecture configuration
+    USE_ENHANCED_ANALYZER: bool = os.getenv("USE_ENHANCED_ANALYZER", "True").lower() in ("true", "1", "yes")
+
+    # Enhanced architecture tuning parameters
+    MAX_ESCALATIONS: int = int(os.getenv("MAX_ESCALATIONS", "2"))
+    MAX_REFINEMENTS: int = int(os.getenv("MAX_REFINEMENTS", "2"))
+
+    # LLM analysis configuration
+    INTENT_CLASSIFICATION_CONFIDENCE_THRESHOLD: float = float(os.getenv("INTENT_CONFIDENCE_THRESHOLD", "0.7"))
+    COMPLEXITY_ANALYSIS_TIMEOUT: int = int(os.getenv("COMPLEXITY_ANALYSIS_TIMEOUT", "30"))
+
+    # Escalation and retry configuration
+    ENABLE_LLM_ESCALATION_DETECTION: bool = os.getenv("ENABLE_LLM_ESCALATION", "True").lower() in ("true", "1", "yes")
+    ENABLE_CONVERSATION_CONTEXT: bool = os.getenv("ENABLE_CONVERSATION_CONTEXT", "True").lower() in ("true", "1", "yes")
+
+
     class Config:
         case_sensitive = True
 

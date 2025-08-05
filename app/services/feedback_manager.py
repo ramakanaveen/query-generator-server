@@ -7,6 +7,7 @@ import asyncpg
 
 from app.core.config import settings
 from app.core.logging import logger
+from app.core.langfuse_client import langfuse_client # Import your Langfuse client
 
 class FeedbackManager:
     """
@@ -215,7 +216,24 @@ class FeedbackManager:
                     "metadata": metadata or {}
                 }
                 feedback_entry["verified_id"] = verified_id
-            
+            # Send score to Langfuse if activated
+            lf_client = langfuse_client.get_client()
+            if lf_client:
+                try:
+                    # Find the trace associated with this query (assuming query_id corresponds to a Langfuse trace)
+                    # You might need to adjust how you link query_id to Langfuse trace_id if they are different.
+                    # A common practice is to pass the trace_id in the metadata during query generation.
+                    # For this example, let's assume query_id is directly usable as trace_id for score.
+                    lf_client.score(
+                        name="user-feedback",
+                        value=1,  # 1 for positive feedback
+                        trace_id=query_id, # Or retrieve trace_id from metadata
+                        comment="User marked query as successful"
+                    )
+                    logger.info(f"Sent positive feedback to Langfuse for query_id: {query_id}")
+                except Exception as lf_error:
+                    logger.warning(f"Failed to send positive feedback to Langfuse: {lf_error}")
+
             return feedback_entry
         
         except Exception as e:
@@ -349,7 +367,20 @@ class FeedbackManager:
                     "metadata": metadata or {}
                 }
                 feedback_entry["failed_id"] = failed_id
-            
+            # Send score to Langfuse if activated
+            lf_client = langfuse_client.get_client()
+            if lf_client:
+                try:
+                    lf_client.score(
+                        name="user-feedback",
+                        value=0, # 0 for negative feedback
+                        trace_id=query_id, # Or retrieve trace_id from metadata
+                        comment=f"User marked query as failed: {feedback_text}"
+                    )
+                    logger.info(f"Sent negative feedback to Langfuse for query_id: {query_id}")
+                except Exception as lf_error:
+                    logger.warning(f"Failed to send negative feedback to Langfuse: {lf_error}")
+
             return feedback_entry
         
         except Exception as e:
