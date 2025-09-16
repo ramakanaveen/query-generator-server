@@ -1,10 +1,11 @@
 # app/services/query_generator.py - Final Enhanced Version
-
+import time
 from typing import Tuple, List, Dict, Any, Optional, Union
 import uuid
 from langgraph.graph import StateGraph, END
 from pydantic import BaseModel, Field
 from app.core.logging import logger
+from app.services.caching.cache_manager import get_cache_manager
 from app.services.query_generation.nodes import (
     intent_classifier,
     schema_description_node,
@@ -31,11 +32,19 @@ class QueryGenerator:
     - Bounded escalation loops with graceful failure
     """
 
-    def __init__(self, llm, use_unified_analyzer=False):
+    def __init__(self, llm, use_unified_analyzer=False , enable_cache=True, use_redis_cache=False):
         self.llm = llm
         self.use_unified_analyzer = use_unified_analyzer  # For backward compatibility
+        self.enable_cache = enable_cache
         self.workflow = self._build_complete_enhanced_workflow()
 
+        # Initialize cache manager
+        if self.enable_cache:
+            self.cache_manager = get_cache_manager(use_redis=use_redis_cache)
+            logger.info(f"Cache enabled: {'Redis' if use_redis_cache else 'Local'}")
+        else:
+            self.cache_manager = None
+            logger.info("Cache disabled")
     def _build_complete_enhanced_workflow(self) -> StateGraph:
         """Build the complete enhanced LangGraph workflow with new architecture."""
         # Initialize the workflow with enhanced state
@@ -179,6 +188,23 @@ class QueryGenerator:
 
         return base_message
 
+    def _build_cache_context(
+            self,
+            database_type: str,
+            user_id: Optional[str] = None,
+            conversation_id: Optional[str] = None,
+            **kwargs
+    ) -> Dict[str, Any]:
+        """Build context for cache key generation"""
+        return {
+            'database_type': database_type,
+            'user_id': user_id or 'anonymous',
+            'conversation_id': conversation_id,
+            'model_version': getattr(self.llm, 'model_name', 'unknown'),
+            'schema_version': 'latest',  # You might want to track this
+            **kwargs
+        }
+
     async def generate(
             self,
             query: str,
@@ -200,7 +226,38 @@ class QueryGenerator:
         - Context-aware retry handling
         - Bounded loops with graceful failure
         """
+        generation_start_time = time.time()
+
         try:
+            # Build cache context
+            cache_context = self._build_cache_context(
+                database_type=database_type,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                is_retry=is_retry
+            )
+
+            # 🎯 STEP 1: CHECK CACHE FIRST (Option 1 approach)
+            cached_result = None
+            if self.enable_cache and not is_retry:  # Don't use cache for retries
+                cache_start_time = time.time()
+                cached_result = await self.cache_manager.get_cached_response(query, cache_context)
+                cache_check_time = time.time() - cache_start_time
+
+                if cached_result:
+                    logger.info(f"Cache HIT for query: {query[:50]}... (took {cache_check_time*1000:.1f}ms)")
+
+                    # Add cache info to thinking
+                    thinking = cached_result.get('thinking', [])
+                    thinking.insert(0, f"💾 Cache HIT - Retrieved cached response in {cache_check_time*1000:.1f}ms")
+                    thinking.append(f"⚡ Total time saved by caching: {(time.time() - generation_start_time)*1000:.1f}ms")
+
+                    return cached_result['result'], thinking
+                else:
+                    logger.info(f"Cache MISS for query: {query[:50]}... (check took {cache_check_time*1000:.1f}ms)")
+            # 🎯 STEP 2: CACHE MISS - RUN NORMAL WORKFLOW
+            workflow_start_time = time.time()
+
             # Initialize the enhanced state
             initial_state = QueryGenerationState(
                 query=query,
@@ -219,6 +276,9 @@ class QueryGenerator:
             # Add comprehensive thinking steps
             initial_state.thinking.append(f"🚀 Starting {'retry' if is_retry else 'initial'} query processing with enhanced LLM architecture")
             initial_state.thinking.append(f"📝 Query: {query}")
+            if self.enable_cache:
+                initial_state.thinking.append("💾 Cache MISS - Generating fresh response")
+
             if database_type != "kdb":
                 initial_state.thinking.append(f"🔧 Database type: {database_type}")
             if is_retry:
@@ -243,7 +303,7 @@ class QueryGenerator:
                 callbacks.append(langfuse_client.get_callback_handler())
 
             result = await self.workflow.ainvoke(initial_state, config={"callbacks": callbacks})
-
+            workflow_time = time.time() - workflow_start_time
             # Extract and format results with enhanced metadata
             thinking = result.get("thinking", [])
             intent_type = result.get("intent_type", "query_generation")
@@ -255,14 +315,52 @@ class QueryGenerator:
 
             # Enhanced result processing with more metadata
             if intent_type == "query_generation":
-                return self._process_enhanced_query_generation_result(result, thinking)
+                final_result, final_thinking =  self._process_enhanced_query_generation_result(result, thinking)
             elif intent_type == "schema_description":
-                return self._process_enhanced_schema_description_result(result, thinking)
+                final_result, final_thinking =  self._process_enhanced_schema_description_result(result, thinking)
             elif intent_type == "help":
-                return self._process_enhanced_help_result(result, thinking)
+                final_result, final_thinking =  self._process_enhanced_help_result(result, thinking)
             else:
                 logger.warning(f"Unknown intent type: {intent_type}")
-                return self._process_unknown_intent_result(result, thinking)
+                final_result, final_thinking =  self._process_unknown_intent_result(result, thinking)
+            # 🎯 STEP 3: POPULATE CACHE (if successful and cacheable)
+            if self.enable_cache and not is_retry:
+                cache_populate_start = time.time()
+                # Determine if result should be cached
+                should_cache = await self._should_cache_result(query, final_result, cache_context, workflow_time)
+
+                if should_cache:
+                    # Prepare cache payload
+                    cache_payload = {
+                        'result': final_result,
+                        'thinking': final_thinking,
+                        'workflow_time': workflow_time,
+                        'generation_metadata': {
+                            'intent_type': intent_type,
+                            'escalation_count': escalation_count,
+                            'refinement_count': refinement_count,
+                            'timestamp': time.time()
+                        }
+                    }
+
+                    # Cache the result
+                    cache_success = await self.cache_manager.cache_response(query, cache_payload, cache_context)
+                    cache_populate_time = time.time() - cache_populate_start
+
+                    if cache_success:
+                        logger.info(f"Cached response for query: {query[:50]}... (cache populate took {cache_populate_time*1000:.1f}ms)")
+                        final_thinking.append(f"💾 Response cached for future use (took {cache_populate_time*1000:.1f}ms)")
+                    else:
+                        logger.warning(f"Failed to cache response for query: {query[:50]}...")
+                        final_thinking.append("⚠️ Failed to cache response")
+                else:
+                    logger.info(f"Skipping cache for query: {query[:50]}... (not suitable for caching)")
+
+            total_time = time.time() - generation_start_time
+            logger.info(f"⏱️ Total generation time: {total_time:.4f} seconds")
+            logger.info(f"✅ Query generated successfully with {len(final_thinking)} thinking steps")
+
+            return final_result, final_thinking
 
         except Exception as e:
             logger.error(f"Error in complete enhanced query generation: {str(e)}", exc_info=True)
@@ -274,6 +372,74 @@ class QueryGenerator:
                     "error_message": str(e)
                 }
             }, [f"❌ Critical Error: {str(e)}"]
+
+    async def _should_cache_result(
+            self,
+            query: str,
+            result: Dict[str, Any],
+            context: Dict[str, Any],
+            workflow_time: float
+    ) -> bool:
+        """Determine if the result should be cached"""
+
+        # Don't cache errors
+        if result.get('intent_type') == 'error':
+            return False
+
+        # Don't cache if no meaningful content generated
+        if not result.get('generated_query') and not result.get('generated_content'):
+            return False
+
+        # Don't cache if workflow took too long (might be unreliable)
+        if workflow_time > 30:
+            logger.info(f"Not caching - workflow took too long: {workflow_time:.2f}s")
+            return False
+
+        # Don't cache if validation failed repeatedly
+        if result.get('query_metadata', {}).get('escalation_count', 0) > 2:
+            logger.info("Not caching - too many escalations (potentially unreliable)")
+            return False
+
+        # Use cache manager's built-in logic
+        return self.cache_manager.should_cache_query(query, context)
+
+    async def get_cache_stats(self) -> Dict[str, Any]:
+        """Get comprehensive cache statistics"""
+        if not self.enable_cache:
+            return {'cache_enabled': False}
+
+        return await self.cache_manager.get_stats()
+
+    async def clear_cache(self, pattern: Optional[str] = None) -> Dict[str, Any]:
+        """Clear cache with optional pattern matching"""
+        if not self.enable_cache:
+            return {'cache_enabled': False, 'cleared': 0}
+
+        cleared_count = await self.cache_manager.clear_cache(pattern)
+        return {
+            'cache_enabled': True,
+            'cleared': cleared_count,
+            'pattern': pattern or 'all'
+        }
+
+    async def switch_to_redis_cache(self, redis_url: Optional[str] = None) -> Dict[str, Any]:
+        """Switch from local cache to Redis cache"""
+        if not self.enable_cache:
+            return {'success': False, 'reason': 'Cache not enabled'}
+
+        try:
+            await self.cache_manager.switch_to_redis(redis_url)
+            return {
+                'success': True,
+                'cache_type': 'redis',
+                'redis_url': redis_url or 'default'
+            }
+        except Exception as e:
+            logger.error(f"Failed to switch to Redis cache: {e}")
+            return {
+                'success': False,
+                'reason': str(e)
+            }
 
     def _sanitize_conversation_history(self, conversation_history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Sanitize and validate conversation history."""

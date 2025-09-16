@@ -96,6 +96,7 @@ class QueryGenerationState(BaseModel):
 
     # Processing metadata
     thinking: List[str] = Field(default_factory=list, description="Thinking process during generation")
+    few_shot_examples: List[str] = Field(default_factory=list, description="Few Shot Examples for query generation")
 
     class Config:
         arbitrary_types_allowed = True  # Allow Any type for LLM
