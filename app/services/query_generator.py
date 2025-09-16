@@ -12,7 +12,7 @@ from app.services.query_generation.nodes import (
     query_generator_node,
     query_validator,
     query_refiner,
-    intelligent_analyzer
+    intelligent_analyzer, enhanced_schema_retriever
 )
 from app.core.langfuse_client import langfuse_client
 
@@ -43,7 +43,8 @@ class QueryGenerator:
 
         # Add all the enhanced nodes
         workflow.add_node("intent_classifier", intent_classifier.classify_intent)
-        workflow.add_node("schema_retriever", schema_retriever.retrieve_schema)
+        # workflow.add_node("schema_retriever", schema_retriever.retrieve_schema)
+        workflow.add_node("schema_retriever", enhanced_schema_retriever.retrieve_schema_with_examples)
         workflow.add_node("intelligent_analyzer", intelligent_analyzer.intelligent_analyze_query)
         workflow.add_node("query_generator", query_generator_node.generate_query)
         workflow.add_node("query_validator", query_validator.validate_query)
