@@ -22,6 +22,151 @@ router = APIRouter()
 # Global lock that will be created only once when the module is imported
 _connection_lock = None
 
+def handle_execution_error(e: Exception, endpoint_version: str = "") -> HTTPException:
+    """
+    Centralized error handler for query execution endpoints.
+    Returns user-friendly error messages suitable for UI display.
+
+    Args:
+        e: The exception that was raised
+        endpoint_version: Optional version tag for logging (e.g., "[V2]")
+
+    Returns:
+        HTTPException with appropriate status code and user-friendly message
+    """
+    # Re-raise HTTPException as-is (validation errors)
+    if isinstance(e, HTTPException):
+        return e
+
+    # Handle specific exception types
+    if isinstance(e, ConnectionError):
+        logger.error(f"{endpoint_version} Database connection error: {str(e)}", exc_info=True)
+        return HTTPException(
+            status_code=503,
+            detail="Unable to connect to the database. Please check your connection and try again."
+        )
+
+    if isinstance(e, TimeoutError):
+        logger.error(f"{endpoint_version} Query timeout: {str(e)}", exc_info=True)
+        return HTTPException(
+            status_code=408,
+            detail="The query took too long to execute. Please try simplifying your query or contact support."
+        )
+
+    if isinstance(e, ValueError):
+        logger.error(f"{endpoint_version} Invalid query or parameters: {str(e)}", exc_info=True)
+        return HTTPException(
+            status_code=400,
+            detail="The query or parameters are invalid. Please check your input and try again."
+        )
+
+    if isinstance(e, PermissionError):
+        logger.error(f"{endpoint_version} Permission denied: {str(e)}", exc_info=True)
+        return HTTPException(
+            status_code=403,
+            detail="You don't have permission to execute this query. Please contact your administrator."
+        )
+
+    # For generic exceptions, check error message for common patterns
+    logger.error(f"{endpoint_version} Unexpected error executing query: {str(e)}", exc_info=True)
+
+    error_msg = str(e).lower()
+    if "syntax" in error_msg or "parse" in error_msg:
+        return HTTPException(
+            status_code=400,
+            detail="The query contains a syntax error. Please review your query and try again."
+        )
+    elif "connection" in error_msg or "network" in error_msg:
+        return HTTPException(
+            status_code=503,
+            detail="Database connection issue. Please try again in a moment."
+        )
+    elif "timeout" in error_msg:
+        return HTTPException(
+            status_code=408,
+            detail="The query timed out. Please try a simpler query or contact support."
+        )
+    else:
+        # Generic user-friendly message
+        return HTTPException(
+            status_code=500,
+            detail="An unexpected error occurred while executing your query. Please try again or contact support if the issue persists."
+        )
+
+def handle_generation_error(e: Exception, endpoint_version: str = "") -> HTTPException:
+    """
+    Centralized error handler for query generation endpoints.
+    Returns user-friendly error messages suitable for UI display.
+
+    Args:
+        e: The exception that was raised
+        endpoint_version: Optional version tag for logging (e.g., "[V2]")
+
+    Returns:
+        HTTPException with appropriate status code and user-friendly message
+    """
+    # Re-raise HTTPException as-is (validation errors)
+    if isinstance(e, HTTPException):
+        return e
+
+    # Handle specific exception types
+    if isinstance(e, ValueError):
+        logger.error(f"{endpoint_version} Validation error in query generation: {str(e)}", exc_info=True)
+        return HTTPException(
+            status_code=400,
+            detail="Invalid request. Please check your input and try again."
+        )
+
+    if isinstance(e, ConnectionError):
+        logger.error(f"{endpoint_version} Connection error during query generation: {str(e)}", exc_info=True)
+        return HTTPException(
+            status_code=503,
+            detail="Unable to connect to the AI service. Please try again in a moment."
+        )
+
+    if isinstance(e, TimeoutError):
+        logger.error(f"{endpoint_version} Timeout during query generation: {str(e)}", exc_info=True)
+        return HTTPException(
+            status_code=408,
+            detail="The request took too long to process. Please try again."
+        )
+
+    # For generic exceptions, check error message for common patterns
+    logger.error(f"{endpoint_version} Unexpected error in query generation: {str(e)}", exc_info=True)
+
+    error_msg = str(e).lower()
+    if "api" in error_msg and ("key" in error_msg or "auth" in error_msg):
+        return HTTPException(
+            status_code=503,
+            detail="AI service authentication issue. Please contact support."
+        )
+    elif "rate limit" in error_msg or "quota" in error_msg:
+        return HTTPException(
+            status_code=429,
+            detail="Service is currently busy. Please try again in a few moments."
+        )
+    elif "model" in error_msg and ("not found" in error_msg or "unavailable" in error_msg):
+        return HTTPException(
+            status_code=503,
+            detail="The AI model is currently unavailable. Please try again later."
+        )
+    elif "timeout" in error_msg:
+        return HTTPException(
+            status_code=408,
+            detail="The request timed out. Please try again."
+        )
+    elif "connection" in error_msg or "network" in error_msg:
+        return HTTPException(
+            status_code=503,
+            detail="Network issue occurred. Please try again in a moment."
+        )
+    else:
+        # Generic user-friendly message without exposing internal details
+        return HTTPException(
+            status_code=500,
+            detail="Unable to generate query at this time. Please try again or contact support if the issue persists."
+        )
+
 def get_connection_lock():
     """Get the global asyncio lock, initializing it in the correct context if needed."""
     global _connection_lock
@@ -167,12 +312,8 @@ async def generate_query(request: QueryRequest):
             query_complexity="SINGLE_LINE"  # Default for backward compatibility
         )
 
-    except ValueError as e:
-        logger.error(f"ValueError in generate_query endpoint: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Exception in generate_query endpoint: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Query generation failed: {str(e)}")
+        raise handle_generation_error(e)
 
 
 @router.post("/query/v2", response_model=QueryResponse)
@@ -289,12 +430,8 @@ async def generate_query_v2(request: QueryRequest):
             query_complexity=query_complexity  # NEW: Return complexity
         )
 
-    except ValueError as e:
-        logger.error(f"[V2] ValueError in generate_query endpoint: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"[V2] Exception in generate_query endpoint: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Query generation failed: {str(e)}")
+        raise handle_generation_error(e, "[V2]")
 
 @router.post("/execute", response_model=ExecutionResponse)
 async def execute_query(
@@ -324,6 +461,21 @@ async def execute_query(
         if request.pagination is not None:
             page = request.pagination.page
             page_size = request.pagination.page_size
+
+        # Validate pagination parameters
+        if page < 0:
+            logger.warning(f"Invalid page number: {page}")
+            raise HTTPException(
+                status_code=400,
+                detail="Page number must be non-negative. Please check your pagination settings."
+            )
+
+        if page_size <= 0 or page_size > 10000:
+            logger.warning(f"Invalid page size: {page_size}")
+            raise HTTPException(
+                status_code=400,
+                detail="Page size must be between 1 and 10,000. Please adjust your pagination settings."
+            )
 
         logger.info(f"⚠️  Using LEGACY execute endpoint - consider migrating to /execute/v2")
 
@@ -355,11 +507,7 @@ async def execute_query(
         )
 
     except Exception as e:
-        logger.error(f"Error executing query: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Query execution failed: {str(e)}"
-        )
+        raise handle_execution_error(e)
 
 
 @router.post("/execute/v2", response_model=ExecutionResponse)
@@ -394,6 +542,21 @@ async def execute_query_v2(
             page = request.pagination.page
             page_size = request.pagination.page_size
 
+        # Validate pagination parameters
+        if page < 0:
+            logger.warning(f"[V2] Invalid page number: {page}")
+            raise HTTPException(
+                status_code=400,
+                detail="Page number must be non-negative. Please check your pagination settings."
+            )
+
+        if page_size <= 0 or page_size > 10000:
+            logger.warning(f"[V2] Invalid page size: {page_size}")
+            raise HTTPException(
+                status_code=400,
+                detail="Page size must be between 1 and 10,000. Please adjust your pagination settings."
+            )
+
         logger.info(f"🚀 [V2] Executing query with complexity: {query_complexity}")
 
         # Execute query with pagination at database level (NEW METHOD)
@@ -425,8 +588,4 @@ async def execute_query_v2(
         )
 
     except Exception as e:
-        logger.error(f"[V2] Error executing query: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Query execution failed: {str(e)}"
-        )
+        raise handle_execution_error(e, "[V2]")
