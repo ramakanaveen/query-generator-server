@@ -504,7 +504,7 @@ def update_state_from_validator_analysis(state, validator_result):
         if "escalate_to:" in complexity_rec:
             new_complexity = complexity_rec.split("escalate_to:")[-1].strip()
             state.query_complexity = new_complexity
-            state.escalation_count = getattr(state, 'escalation_count', 0) + 1
+            # Note: escalation_count is incremented in routing logic, not here
             state.thinking.append(f"⬆️ Complexity escalated to: {new_complexity}")
         elif "simplify_to:" in complexity_rec:
             new_complexity = complexity_rec.split("simplify_to:")[-1].strip()

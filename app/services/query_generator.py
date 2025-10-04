@@ -123,10 +123,12 @@ class QueryGenerator:
         if getattr(state, 'needs_reanalysis', False):
             # Check escalation limits
             if state.escalation_count < state.max_escalations:
-                state.thinking.append("🔄 Routing to intelligent analyzer for re-analysis")
+                # Increment escalation count BEFORE routing
+                state.escalation_count += 1
+                state.thinking.append(f"🔄 Routing to intelligent analyzer for re-analysis (escalation {state.escalation_count}/{state.max_escalations})")
                 return "intelligent_analyzer"
             else:
-                state.thinking.append("⚠️ Max escalations reached, trying legacy refinement")
+                state.thinking.append(f"⚠️ Max escalations reached ({state.escalation_count}/{state.max_escalations}), trying legacy refinement")
                 # Fall through to refinement check below
 
         # 2. Check if schema reselection is needed
