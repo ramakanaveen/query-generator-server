@@ -9,7 +9,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from app.services.query_generation.nodes.query_generator_node import (
     get_glossary_for_schema_group,
-    get_glossary_from_schema,
+    get_glossary_from_directives,
     format_glossary_for_prompt,
     generate_initial_query,
     generate_syntax_fix_query,
@@ -58,54 +58,53 @@ class TestGlossaryRetrieval:
         assert isinstance(result, dict)
 
     @pytest.mark.asyncio
-    async def test_get_glossary_from_schema_with_valid_schema(self):
-        """Test get_glossary_from_schema with valid schema dict."""
-        schema = {
-            "schema": "trading_schema",
-            "tables": {
-                "trades": {}
-            }
-        }
+    async def test_get_glossary_from_directives_with_single_directive(self):
+        """Test get_glossary_from_directives with a single directive."""
+        directives = ["trading_schema"]
 
-        result = await get_glossary_from_schema(schema)
+        result = await get_glossary_from_directives(directives)
 
         assert isinstance(result, dict)
         assert len(result) > 0
+        assert "TCA" in result
+        assert "VWAP" in result
 
     @pytest.mark.asyncio
-    async def test_get_glossary_from_schema_with_missing_schema_field(self):
-        """Test get_glossary_from_schema when schema field is missing."""
-        schema = {
-            "tables": {
-                "trades": {}
-            }
-        }
+    async def test_get_glossary_from_directives_with_multiple_directives(self):
+        """Test get_glossary_from_directives combines multiple directives."""
+        directives = ["trading_schema", "analytics_schema"]
 
-        result = await get_glossary_from_schema(schema)
+        result = await get_glossary_from_directives(directives)
+
+        assert isinstance(result, dict)
+        assert len(result) > 0
+        # Should have terms from both schemas (currently returns same hardcoded data)
+
+    @pytest.mark.asyncio
+    async def test_get_glossary_from_directives_with_empty_list(self):
+        """Test get_glossary_from_directives with empty list."""
+        result = await get_glossary_from_directives([])
 
         assert isinstance(result, dict)
         assert len(result) == 0
 
     @pytest.mark.asyncio
-    async def test_get_glossary_from_schema_with_none_schema(self):
-        """Test get_glossary_from_schema with None."""
-        result = await get_glossary_from_schema(None)
+    async def test_get_glossary_from_directives_with_none(self):
+        """Test get_glossary_from_directives with None."""
+        result = await get_glossary_from_directives(None)
 
         assert isinstance(result, dict)
         assert len(result) == 0
 
     @pytest.mark.asyncio
-    async def test_get_glossary_from_schema_with_empty_schema_name(self):
-        """Test get_glossary_from_schema with empty schema name."""
-        schema = {
-            "schema": "",
-            "tables": {}
-        }
+    async def test_get_glossary_from_directives_skips_empty_directives(self):
+        """Test that empty strings in directives list are skipped."""
+        directives = ["trading_schema", "", "analytics_schema"]
 
-        result = await get_glossary_from_schema(schema)
+        result = await get_glossary_from_directives(directives)
 
         assert isinstance(result, dict)
-        assert len(result) == 0
+        assert len(result) > 0
 
 
 class TestGlossaryFormatting:
@@ -162,7 +161,7 @@ class TestGlossaryIntegrationInGeneration:
         # Create mock state
         mock_state = MagicMock()
         mock_state.query = "Show me TCA for AAPL"
-        mock_state.directives = []
+        mock_state.directives = ["trading_schema"]
         mock_state.entities = []
         mock_state.query_schema = {
             "schema": "trading_schema",
@@ -214,6 +213,7 @@ class TestGlossaryIntegrationInGeneration:
         # Create mock state
         mock_state = MagicMock()
         mock_state.query = "Show me VWAP"
+        mock_state.directives = ["spot"]
         mock_state.generated_query = "select vwap from trades"
         mock_state.query_schema = {
             "schema": "trading_schema",
@@ -251,6 +251,7 @@ class TestGlossaryIntegrationInGeneration:
         # Create mock state
         mock_state = MagicMock()
         mock_state.query = "Show me notional"
+        mock_state.directives = ["trading_schema"]
         mock_state.generated_query = "select notional from trades"
         mock_state.query_schema = {
             "schema": "trading_schema",
@@ -288,6 +289,7 @@ class TestGlossaryIntegrationInGeneration:
         # Create mock state
         mock_state = MagicMock()
         mock_state.query = "Calculate slippage"
+        mock_state.directives = ["trading_schema"]
         mock_state.generated_query = "select slippage from trades"
         mock_state.query_schema = {
             "schema": "trading_schema",
@@ -330,6 +332,7 @@ class TestGlossaryIntegrationInGeneration:
         # Create mock state
         mock_state = MagicMock()
         mock_state.query = "Show me alpha"
+        mock_state.directives = ["trading_schema"]
         mock_state.original_generated_query = "select alpha from metrics"
         mock_state.user_feedback = "Add date filter"
         mock_state.query_schema = {
@@ -378,7 +381,7 @@ class TestGlossaryErrorHandling:
         with patch('app.services.query_generation.nodes.query_generator_node.get_glossary_for_schema_group') as mock_get:
             mock_get.side_effect = Exception("Database error")
 
-            result = await get_glossary_from_schema({"schema": "test"})
+            result = await get_glossary_from_directives(["test_schema"])
 
             # Should return empty dict on error
             assert isinstance(result, dict)

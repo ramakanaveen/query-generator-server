@@ -245,16 +245,8 @@ async def generate_with_llm_guidance(state, llm):
 async def generate_syntax_fix_query(state, llm, instructions, complexity):
     """Generate query focusing on syntax fixes while maintaining structure."""
     try:
-        # Retrieve glossary
-        glossary = {}
-        schema = state.query_schema
-        try:
-            schema_group_name = schema.get("schema", "") if isinstance(schema, dict) else ""
-            if schema_group_name:
-                glossary = await get_glossary_for_schema_group(schema_group_name)
-        except Exception as e:
-            logger.error(f"Error loading glossary in syntax fix: {str(e)}")
-
+        # Retrieve glossary from directives
+        glossary = await get_glossary_from_directives(state.directives)
         glossary_text = format_glossary_for_prompt(glossary)
 
         # Create syntax-focused prompt
@@ -291,8 +283,8 @@ Generate the corrected query with proper syntax:
 async def generate_schema_fix_query(state, llm, instructions, complexity):
     """Generate query focusing on schema reference corrections."""
     try:
-        # Retrieve glossary
-        glossary = await get_glossary_from_schema(state.query_schema)
+        # Retrieve glossary from directives
+        glossary = await get_glossary_from_directives(state.directives)
         glossary_text = format_glossary_for_prompt(glossary)
 
         # Create schema-focused prompt
@@ -332,8 +324,8 @@ async def generate_complexity_escalated_query(state, llm, instructions, new_comp
         # Get complexity guidance for the new level
         complexity_guidance, kdb_notes = get_complexity_guidance(new_complexity, state.execution_plan)
 
-        # Retrieve glossary
-        glossary = await get_glossary_from_schema(state.query_schema)
+        # Retrieve glossary from directives
+        glossary = await get_glossary_from_directives(state.directives)
         glossary_text = format_glossary_for_prompt(glossary)
 
         # Create complexity escalation prompt
@@ -454,8 +446,8 @@ async def generate_retry_query(state, llm):
 
         few_shot_text = format_few_shot_examples(few_shot_examples)
 
-        # Retrieve glossary
-        glossary = await get_glossary_from_schema(state.query_schema)
+        # Retrieve glossary from directives
+        glossary = await get_glossary_from_directives(state.directives)
         glossary_text = format_glossary_for_prompt(glossary)
 
         # Create retry-specific prompt
@@ -550,14 +542,12 @@ async def generate_initial_query(state, llm, additional_guidance=""):
         # Get complexity-specific guidance and KDB notes
         complexity_guidance, kdb_notes = get_complexity_guidance(query_complexity, execution_plan)
 
-        # Retrieve and format glossary
+        # Retrieve and format glossary from directives
         glossary = {}
         try:
-            schema_group_name = schema.get("schema", "") if isinstance(schema, dict) else ""
-            if schema_group_name:
-                glossary = await get_glossary_for_schema_group(schema_group_name)
-                if glossary:
-                    state.thinking.append(f"📖 Loaded business glossary with {len(glossary)} terms")
+            glossary = await get_glossary_from_directives(directives)
+            if glossary:
+                state.thinking.append(f"📖 Loaded business glossary with {len(glossary)} terms from {len(directives)} directive(s)")
         except Exception as e:
             logger.error(f"Error loading glossary: {str(e)}")
             state.thinking.append(f"⚠️ Could not load glossary: {str(e)}")
@@ -689,9 +679,43 @@ def format_schema_for_retry(schema):
 
     return formatted
 
+async def get_glossary_from_directives(directives: list) -> Dict[str, str]:
+    """
+    Retrieve and combine glossaries from multiple directives (schema group names).
+
+    Args:
+        directives: List of schema group names (directives)
+
+    Returns:
+        Combined dictionary of glossary terms from all directives
+        If there are duplicate terms, later directives override earlier ones
+    """
+    combined_glossary = {}
+
+    if not directives or not isinstance(directives, list):
+        return combined_glossary
+
+    try:
+        for directive in directives:
+            if directive:  # Skip empty directives
+                glossary = await get_glossary_for_schema_group(directive)
+                # Merge glossaries - later directives can override earlier ones
+                combined_glossary.update(glossary)
+
+        if combined_glossary:
+            logger.info(f"Combined glossary from {len(directives)} directive(s): {len(combined_glossary)} total terms")
+
+        return combined_glossary
+
+    except Exception as e:
+        logger.error(f"Error retrieving glossary from directives: {str(e)}", exc_info=True)
+        return {}
+
 async def get_glossary_from_schema(schema: Dict[str, Any]) -> Dict[str, str]:
     """
     Helper function to retrieve glossary from schema object.
+
+    DEPRECATED: Use get_glossary_from_directives() instead as directives contain schema group names.
 
     Args:
         schema: The schema dictionary containing schema_group_name
