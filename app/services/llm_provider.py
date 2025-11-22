@@ -30,6 +30,7 @@ class LLMProvider:
         if not self._initialized:
             self._model_initializers = {
                 "gemini": self._init_gemini,
+                "gemini-fast": self._init_gemini_fast,
                 "claude": self._init_claude
             }
             self._initialized = True
@@ -71,6 +72,41 @@ class LLMProvider:
             model.callbacks = [langfuse_client.get_callback_handler()] #
 
         self._models["gemini"] = model
+        return model
+
+    def _init_gemini_fast(self):
+        """Initialize and return a Gemini Fast model instance."""
+        # Check if already initialized
+        if "gemini-fast" in self._models:
+            return self._models["gemini-fast"]
+
+        # Ensure credentials and init (re-using logic from _init_gemini would be better but keeping it simple)
+        credentials_path = settings.GOOGLE_CREDENTIALS_PATH
+        credentials_file = Path(credentials_path)
+        if not credentials_file.exists():
+             raise FileNotFoundError(f"Google credentials file not found at {credentials_path}")
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(credentials_file)
+        
+        # Initialize AI Platform (idempotent)
+        aiplatform.init(
+            project=settings.GOOGLE_PROJECT_ID,
+            location=settings.GOOGLE_LOCATION
+        )
+
+        # Create and cache the model
+        model = ChatVertexAI(
+            model_name=settings.GEMINI_FAST_MODEL_NAME,
+            temperature=settings.GEMINI_TEMPERATURE,
+            top_p=settings.GEMINI_TOP_P,
+            verbose=settings.DEBUG,
+            project=settings.GOOGLE_PROJECT_ID,
+            location=settings.GOOGLE_LOCATION,
+        )
+        # Attach Langfuse callback handler
+        if langfuse_client.get_callback_handler():
+            model.callbacks = [langfuse_client.get_callback_handler()]
+
+        self._models["gemini-fast"] = model
         return model
 
     def _init_claude(self):

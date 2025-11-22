@@ -9,6 +9,7 @@ class QueryGenerationState(BaseModel):
     # Core request information
     query: str = Field(..., description="The original natural language query")
     llm: Any = Field(..., description="The language model to use")
+    fast_llm: Optional[Any] = Field(default=None, description="The fast language model to use for simpler tasks")
     database_type: str = Field(default="kdb", description="Type of database to query")
 
     # NEW: Intent classification results (from intent_classifier)

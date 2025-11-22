@@ -13,7 +13,8 @@ from app.services.query_generation.nodes import (
     query_generator_node,
     query_validator,
     query_refiner,
-    intelligent_analyzer, enhanced_schema_retriever
+    intelligent_analyzer, enhanced_schema_retriever,
+    initial_processor
 )
 from app.core.langfuse_client import langfuse_client
 
@@ -32,8 +33,9 @@ class QueryGenerator:
     - Bounded escalation loops with graceful failure
     """
 
-    def __init__(self, llm, use_unified_analyzer=False , enable_cache=True, use_redis_cache=False):
+    def __init__(self, llm, fast_llm=None, use_unified_analyzer=False , enable_cache=True, use_redis_cache=False):
         self.llm = llm
+        self.fast_llm = fast_llm or llm  # Fallback to main LLM if fast_llm not provided
         self.use_unified_analyzer = use_unified_analyzer  # For backward compatibility
         self.enable_cache = enable_cache
         self.workflow = self._build_complete_enhanced_workflow()
@@ -51,8 +53,9 @@ class QueryGenerator:
         workflow = StateGraph(QueryGenerationState)
 
         # Add all the enhanced nodes
-        workflow.add_node("intent_classifier", intent_classifier.classify_intent)
-        # workflow.add_node("schema_retriever", schema_retriever.retrieve_schema)
+        # Add all the enhanced nodes
+        workflow.add_node("initial_processor", initial_processor.process_initial_request)
+        workflow.add_node("intent_classifier", intent_classifier.classify_intent) # Kept for individual testing if needed
         workflow.add_node("schema_retriever", enhanced_schema_retriever.retrieve_schema_with_examples)
         workflow.add_node("intelligent_analyzer", intelligent_analyzer.intelligent_analyze_query)
         workflow.add_node("query_generator", query_generator_node.generate_query)
@@ -60,17 +63,17 @@ class QueryGenerator:
         workflow.add_node("query_refiner", query_refiner.refine_query)  # Legacy fallback
         workflow.add_node("schema_description", schema_description_node.generate_schema_description)
 
-        # Set the entrypoint to intent classification
-        workflow.set_entry_point("intent_classifier")
+        # Set the entrypoint to parallel processor
+        workflow.set_entry_point("initial_processor")
 
-        # Add routing based on intent type (from intent_classifier)
+        # Add routing based on intent type (from initial_processor)
         workflow.add_conditional_edges(
-            "intent_classifier",
-            self._route_after_intent_classification
+            "initial_processor",
+            self._route_after_initial_processing
         )
 
-        # Query generation path: schema → analysis → generation → validation
-        workflow.add_edge("schema_retriever", "intelligent_analyzer")
+        # Query generation path: initial_processor -> intelligent_analyzer -> generation -> validation
+        # Note: schema retrieval is already done in initial_processor
         workflow.add_edge("intelligent_analyzer", "query_generator")
         workflow.add_edge("query_generator", "query_validator")
 
@@ -91,6 +94,21 @@ class QueryGenerator:
 
         # Compile the workflow
         return workflow.compile()
+
+    def _route_after_initial_processing(self, state: QueryGenerationState) -> str:
+        """Route based on intent classification results from parallel processor."""
+        intent_type = state.intent_type
+
+        if intent_type == "schema_description":
+            return "schema_description"
+        elif intent_type == "help":
+            # For help requests, we could add a dedicated help node
+            # For now, route to schema_description which can handle help
+            return "schema_description"
+        else:
+            # Default to query generation path
+            # Schema retrieval is already done in parallel processor
+            return "intelligent_analyzer"
 
     def _route_after_intent_classification(self, state: QueryGenerationState) -> str:
         """Route based on intent classification results."""
@@ -272,7 +290,8 @@ class QueryGenerator:
                 # Enhanced: Retry fields
                 is_retry_request=is_retry,
                 original_generated_query=original_generated_query,
-                user_feedback=user_feedback
+                user_feedback=user_feedback,
+                fast_llm=self.fast_llm
             )
 
             # Add comprehensive thinking steps

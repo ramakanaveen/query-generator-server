@@ -228,9 +228,11 @@ async def generate_query(request: QueryRequest):
         # Initialize services
         llm_provider = LLMProvider()
         llm = llm_provider.get_model(model)
+        fast_llm = llm_provider.get_model("gemini-fast")
 
         query_generator = QueryGenerator(
             llm=llm,
+            fast_llm=fast_llm,
             use_unified_analyzer=settings.USE_ENHANCED_ANALYZER
         )
 
@@ -343,9 +345,11 @@ async def generate_query_v2(request: QueryRequest):
         # Initialize services
         llm_provider = LLMProvider()
         llm = llm_provider.get_model(model)
+        fast_llm = llm_provider.get_model("gemini-fast")
 
         query_generator = QueryGenerator(
             llm=llm,
+            fast_llm=fast_llm,
             use_unified_analyzer=settings.USE_ENHANCED_ANALYZER
         )
 
