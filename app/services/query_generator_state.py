@@ -30,6 +30,7 @@ class QueryGenerationState(BaseModel):
     schema_constraints: str = Field(default="", description="Schema limitations or considerations")
 
     # Schema and generation
+    schema_metadata: Dict[str, Any] = Field(default_factory=dict, description="Metadata from schema retrieval")
     query_schema: Dict[str, Any] = Field(default_factory=dict, description="Retrieved schema information")
     generated_query: Optional[str] = Field(default=None, description="Generated database query")
     generated_content: Optional[str] = Field(default=None, description="Generated content for non-query intents")
@@ -97,6 +98,7 @@ class QueryGenerationState(BaseModel):
     # Processing metadata
     thinking: List[str] = Field(default_factory=list, description="Thinking process during generation")
     few_shot_examples: List[str] = Field(default_factory=list, description="Few Shot Examples for query generation")
+    performance_metrics: Dict[str, Any] = Field(default_factory=dict, description="Performance metrics")
 
     class Config:
         arbitrary_types_allowed = True  # Allow Any type for LLM
