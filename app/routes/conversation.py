@@ -78,48 +78,104 @@ async def get_conversations_with_verified_queries():
         raise HTTPException(status_code=500, detail=str(e))
     
 @router.get("/conversations/{conversation_id}", response_model=Conversation)
-async def get_conversation(conversation_id: str):
+async def get_conversation(conversation_id: str, request: Request):
     """
     Get a specific conversation by ID.
+
+    Optional query params for access control:
+    - user_id: User requesting access
+    - share_token: Share token for shared conversations
+
+    If neither is provided, access is granted (backward compatibility).
     """
     try:
         conversation_manager = ConversationManager()
+
+        # Get optional access control params
+        user_id = request.query_params.get("user_id")
+        share_token = request.query_params.get("share_token")
+
+        # If access control params provided, check permissions
+        if user_id or share_token:
+            access_info = await conversation_manager.check_conversation_access(
+                conversation_id=conversation_id,
+                user_id=user_id or "anonymous",
+                share_token=share_token
+            )
+
+            if not access_info["can_view"]:
+                raise HTTPException(
+                    status_code=403,
+                    detail=access_info.get("error", "Access denied")
+                )
+
+        # Get conversation
         conversation = await conversation_manager.get_conversation(conversation_id)
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
-        
+
         # Ensure metadata is a dictionary (and not a string)
         if isinstance(conversation.get("metadata"), str):
             conversation["metadata"] = {}  # Default to empty dict
-        
+
+        # Add access info if checked
+        if user_id or share_token:
+            conversation["access_info"] = access_info
+
         return conversation
-    
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve conversation: {str(e)}")
 
 @router.post("/conversations/{conversation_id}/messages", response_model=Message)
-async def add_message(conversation_id: str, message: Message):
+async def add_message(conversation_id: str, message: Message, request: Request):
     """
     Add a message to a conversation.
+
+    Optional query params for access control:
+    - user_id: User adding the message
+
+    If user_id is provided, checks if user has permission to add messages.
+    Only owners or users with 'edit' access can add messages.
     """
     try:
         conversation_manager = ConversationManager()
+
+        # Get optional user_id for access control
+        user_id = request.query_params.get("user_id")
+
+        # If user_id provided, check permissions
+        if user_id:
+            access_info = await conversation_manager.check_conversation_access(
+                conversation_id=conversation_id,
+                user_id=user_id
+            )
+
+            if not access_info["can_add_messages"]:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"You don't have permission to add messages. Access level: {access_info.get('access_level', 'none')}"
+                )
+
+        # Add message
         added_message = await conversation_manager.add_message(conversation_id, message)
-        
+
         # Ensure metadata is a dictionary (and not a string)
         if isinstance(added_message.get("metadata"), str):
             added_message["metadata"] = {}  # Default to empty dict
-        
+
         # Convert back to a Message model if needed
         if not isinstance(added_message, Message):
             return Message(**added_message)
-        
+
         return added_message
-    
+
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to add message: {str(e)}")
 
@@ -257,4 +313,329 @@ async def delete_conversation(conversation_id: str):
             raise HTTPException(status_code=404, detail="Conversation not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==========================================
+# SHARE MANAGEMENT ENDPOINTS
+# ==========================================
+
+@router.post("/conversations/{conversation_id}/share")
+async def create_conversation_share(
+    conversation_id: str,
+    request: Request
+):
+    """
+    Create a shareable link for a conversation.
+    Only owner can create shares.
+
+    Request Body:
+    {
+        "user_id": "user-A-id",  # Required: who is creating the share
+        "access_level": "view",  # optional, defaults to "view"
+        "expires_at": "2025-12-31T23:59:59Z",  # optional
+        "shared_with": "user-123"  # optional, specific user
+    }
+
+    Response:
+    {
+        "success": true,
+        "share_token": "abc123xyz",
+        "share_url": "http://localhost:8000/api/shared/abc123xyz",
+        "conversation_id": "conv-123",
+        "access_level": "view",
+        "expires_at": "2025-12-31T23:59:59Z"
+    }
+    """
+    try:
+        body = await request.json()
+        user_id = body.get("user_id")
+
+        if not user_id:
+            raise HTTPException(status_code=400, detail="user_id is required")
+
+        access_level = body.get("access_level", "view")
+        expires_at_str = body.get("expires_at")
+        shared_with = body.get("shared_with")
+
+        # Parse expires_at if provided
+        expires_at = None
+        if expires_at_str:
+            from datetime import datetime
+            expires_at = datetime.fromisoformat(expires_at_str.replace('Z', '+00:00'))
+
+        conversation_manager = ConversationManager()
+
+        # Create the share
+        share = await conversation_manager.create_share(
+            conversation_id=conversation_id,
+            shared_by=user_id,
+            access_level=access_level,
+            expires_at=expires_at,
+            shared_with=shared_with
+        )
+
+        # Build share URL
+        share_url = f"http://localhost:8000/api/shared/{share['share_token']}"
+
+        return {
+            "success": True,
+            "share_token": share['share_token'],
+            "share_url": share_url,
+            "conversation_id": share['conversation_id'],
+            "access_level": share['access_level'],
+            "expires_at": share['expires_at'].isoformat() if share.get('expires_at') else None,
+            "created_at": share['created_at'].isoformat() if share.get('created_at') else None
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error creating share: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to create share: {str(e)}")
+
+
+@router.get("/shared/{share_token}")
+async def get_shared_conversation(share_token: str):
+    """
+    Access a shared conversation via token.
+    Validates token and returns conversation with access info.
+
+    Response:
+    {
+        "id": "conv-123",
+        "title": "Trading Queries",
+        "messages": [...],
+        "shared_by": "user-A-id",
+        "access_info": {
+            "has_access": true,
+            "access_level": "view",
+            "can_view": true,
+            "can_edit": false,
+            "can_add_messages": false,
+            "is_owner": false
+        },
+        "created_at": "...",
+        "updated_at": "..."
+    }
+    """
+    try:
+        conversation_manager = ConversationManager()
+
+        # Get conversation via share token
+        conversation = await conversation_manager.get_shared_conversation(
+            share_token=share_token,
+            increment_access_count=True
+        )
+
+        if not conversation:
+            raise HTTPException(
+                status_code=404,
+                detail="Shared conversation not found or link is invalid/expired"
+            )
+
+        # Add access info for frontend
+        conversation['access_info'] = {
+            "has_access": True,
+            "access_level": conversation.get('access_level', 'view'),
+            "can_view": True,
+            "can_edit": conversation.get('access_level') == 'edit',
+            "can_add_messages": conversation.get('access_level') == 'edit',
+            "is_owner": False
+        }
+
+        return conversation
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error accessing shared conversation: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to access shared conversation: {str(e)}")
+
+
+@router.get("/conversations/{conversation_id}/shares")
+async def list_conversation_shares(
+    conversation_id: str,
+    request: Request
+):
+    """
+    List all active shares for a conversation.
+    Only owner can see this.
+
+    Query params:
+    ?user_id=user-A-id  # Required
+
+    Response:
+    {
+        "conversation_id": "conv-123",
+        "shares": [
+            {
+                "id": 1,
+                "share_token": "abc123",
+                "shared_with": "user-B-id",
+                "access_level": "view",
+                "created_at": "...",
+                "expires_at": "...",
+                "access_count": 5,
+                "last_accessed_at": "...",
+                "is_active": true
+            }
+        ]
+    }
+    """
+    try:
+        # Get user_id from query params
+        user_id = request.query_params.get("user_id")
+
+        if not user_id:
+            raise HTTPException(status_code=400, detail="user_id query parameter is required")
+
+        conversation_manager = ConversationManager()
+
+        # Verify user owns the conversation
+        conversation = await conversation_manager.get_conversation(conversation_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+        if conversation.get('user_id') != user_id:
+            raise HTTPException(status_code=403, detail="Only conversation owner can list shares")
+
+        # Get all shares
+        shares = await conversation_manager.get_conversation_shares(conversation_id)
+
+        # Format response
+        formatted_shares = []
+        for share in shares:
+            formatted_shares.append({
+                "id": share['id'],
+                "share_token": share['share_token'],
+                "shared_with": share.get('shared_with'),
+                "access_level": share['access_level'],
+                "created_at": share['created_at'].isoformat() if share.get('created_at') else None,
+                "expires_at": share['expires_at'].isoformat() if share.get('expires_at') else None,
+                "access_count": share.get('access_count', 0),
+                "last_accessed_at": share['last_accessed_at'].isoformat() if share.get('last_accessed_at') else None,
+                "is_active": share.get('is_active', True)
+            })
+
+        return {
+            "conversation_id": conversation_id,
+            "shares": formatted_shares
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing shares: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list shares: {str(e)}")
+
+
+@router.delete("/conversations/{conversation_id}/shares/{share_id}")
+async def revoke_conversation_share(
+    conversation_id: str,
+    share_id: int,
+    request: Request
+):
+    """
+    Revoke a share (set is_active = false).
+    Only owner can revoke.
+
+    Query params:
+    ?user_id=user-A-id  # Required
+
+    Response:
+    {
+        "success": true,
+        "message": "Share revoked successfully"
+    }
+    """
+    try:
+        # Get user_id from query params
+        user_id = request.query_params.get("user_id")
+
+        if not user_id:
+            raise HTTPException(status_code=400, detail="user_id query parameter is required")
+
+        conversation_manager = ConversationManager()
+
+        # Revoke the share
+        success = await conversation_manager.revoke_share(share_id, user_id)
+
+        if not success:
+            raise HTTPException(
+                status_code=403,
+                detail="Share not found or you don't have permission to revoke it"
+            )
+
+        return {
+            "success": True,
+            "message": "Share revoked successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error revoking share: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to revoke share: {str(e)}")
+
+
+@router.get("/user/{user_id}/conversations/all")
+async def list_all_user_conversations(user_id: str, include_shared: bool = True):
+    """
+    Get both owned and shared conversations for a user.
+
+    Response:
+    {
+        "owned": [
+            {
+                "id": "conv-123",
+                "title": "My Query",
+                "user_id": "user-A-id",
+                "ownership": "owner",
+                "shared_with_count": 2,
+                "message_count": 10,
+                "created_at": "...",
+                "updated_at": "..."
+            }
+        ],
+        "shared_with_me": [
+            {
+                "id": "conv-456",
+                "title": "Team Query",
+                "user_id": "user-B-id",
+                "ownership": "shared",
+                "shared_by": "user-B-id",
+                "access_level": "view",
+                "share_token": "xyz789",
+                "shared_at": "...",
+                "message_count": 5
+            }
+        ]
+    }
+    """
+    try:
+        conversation_manager = ConversationManager()
+
+        # Get owned conversations
+        owned_conversations = await conversation_manager.get_user_conversations(user_id)
+
+        # For each owned conversation, get share count
+        for conv in owned_conversations:
+            shares = await conversation_manager.get_conversation_shares(conv['id'])
+            active_shares = [s for s in shares if s.get('is_active', True)]
+            conv['shared_with_count'] = len(active_shares)
+            conv['ownership'] = 'owner'
+
+        # Get shared conversations if requested
+        shared_conversations = []
+        if include_shared:
+            shared_conversations = await conversation_manager.get_user_shared_conversations(user_id)
+
+        return {
+            "owned": owned_conversations,
+            "shared_with_me": shared_conversations
+        }
+
+    except Exception as e:
+        logger.error(f"Error listing all user conversations: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list conversations: {str(e)}")
 

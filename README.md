@@ -9,6 +9,7 @@ A FastAPI application that generates database queries from natural language usin
 - **Vector Search**: Find relevant schemas and tables using semantic similarity
 - **Schema Management**: Upload and manage database schemas via API
 - **Conversation Context**: Maintain context for follow-up questions
+- **Shared Conversations**: Share conversations via secure links with read-only access ⭐ NEW
 - **Real-time Processing**: WebSocket support for real-time applications
 - **Feedback & Refinement**: Collect feedback and generate improved queries
 - **Database Integration**: Ready for PostgreSQL with pgvector extension
@@ -145,19 +146,69 @@ curl -X POST "http://localhost:8000/api/v1/schemas/upload" \
   -F "description=Bond market schema"
 ```
 
+### Share a Conversation ⭐ NEW:
+
+```bash
+# Create a shareable link
+curl -X POST "http://localhost:8000/api/v1/conversations/conv-123/share" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "user-A",
+    "access_level": "view"
+  }'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "share_token": "Y5NPUVK82jTseK7fT1uGce7NFqRqO3UjV412G8hoI_8",
+  "share_url": "http://localhost:8000/api/v1/shared/Y5NPUVK82..."
+}
+```
+
+Now anyone with the link can view the conversation (read-only):
+```bash
+curl "http://localhost:8000/api/v1/shared/Y5NPUVK82jTseK7fT1uGce7NFqRqO3UjV412G8hoI_8"
+```
+
+See [Shared Conversations Guide](./docs/SHARED_CONVERSATIONS.md) for complete documentation.
+
 ## 📚 API Endpoints
 
+### Query Generation
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/v1/query` | POST | Generate a database query from natural language |
+| `/api/v1/retry` | POST | Generate an improved query based on feedback |
+| `/api/v1/directives` | GET | Get available directives based on schema files |
+| `/api/v1/feedback/flexible` | POST | Save user feedback |
+
+### Conversations
+| Endpoint | Method | Description |
+|----------|--------|-------------|
 | `/api/v1/conversations` | POST | Create a new conversation |
 | `/api/v1/conversations/{id}` | GET | Get a specific conversation |
 | `/api/v1/conversations/{id}/messages` | POST | Add a message to a conversation |
-| `/api/v1/directives` | GET | Get available directives based on schema files |
-| `/api/v1/feedback/flexible` | POST | Save user feedback |
-| `/api/v1/retry` | POST | Generate an improved query based on feedback |
+| `/api/v1/user/{user_id}/conversations/all` | GET | Get all conversations (owned + shared) |
+
+### Shared Conversations ⭐ NEW
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/conversations/{id}/share` | POST | Create a shareable link |
+| `/api/v1/shared/{token}` | GET | Access a shared conversation |
+| `/api/v1/conversations/{id}/shares` | GET | List all shares for a conversation |
+| `/api/v1/conversations/{id}/shares/{share_id}` | DELETE | Revoke a share |
+
+### Schema Management
+| Endpoint | Method | Description |
+|----------|--------|-------------|
 | `/api/v1/schemas/upload` | POST | Upload a schema file |
 | `/api/v1/schemas` | GET | List all available schemas |
+
+### WebSocket
+| Endpoint | Method | Description |
+|----------|--------|-------------|
 | `/ws` | WebSocket | Real-time query generation and execution |
 
 ## 📂 Project Structure
@@ -192,6 +243,7 @@ For more detailed documentation, see the `/docs` directory:
 - [Configuration Options](./docs/Configuration.md)
 - [Schema Format](./docs/SchemaFormat.md)
 - [Troubleshooting](./docs/Troubleshooting.md)
+- **[Shared Conversations](./docs/SHARED_CONVERSATIONS.md)** ⭐ NEW - Complete guide to sharing conversations
 
 ## 🔒 Environment Variables
 
