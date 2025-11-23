@@ -27,6 +27,8 @@ async def classify_intent(state):
     try:
         query = state.query
         llm = state.llm
+        # Use fast_llm if available, otherwise fallback to llm
+        classification_llm = getattr(state, 'fast_llm', None) or llm
         database_type = state.database_type
 
         # Extract directives using simple regex (still useful for context)
@@ -44,9 +46,9 @@ async def classify_intent(state):
 
         # Handle retry requests with special analysis
         if state.is_retry_request:
-            await handle_retry_intent_analysis(state, llm, conversation_context)
+            await handle_retry_intent_analysis(state, classification_llm, conversation_context)
         else:
-            await handle_initial_intent_classification(state, llm, directives, conversation_context)
+            await handle_initial_intent_classification(state, classification_llm, directives, conversation_context)
 
         # Log the classification result
         state.thinking.append(f"📋 Intent classified as: {state.intent_type}")

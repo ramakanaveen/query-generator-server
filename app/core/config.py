@@ -29,7 +29,8 @@ class Settings(BaseSettings):
     SCHEMA_MAX_TABLES: int = int(os.getenv("SCHEMA_MAX_TABLES", "5"))
     
     # Gemini model settings
-    GEMINI_MODEL_NAME: str = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro-002")
+    GEMINI_MODEL_NAME: str = os.getenv("GEMINI_MODEL_NAME", "gemini-3.0-pro")
+    GEMINI_FAST_MODEL_NAME: str = os.getenv("GEMINI_FAST_MODEL_NAME", "gemini-2.5-flash")
     GEMINI_TEMPERATURE: float = float(os.getenv("GEMINI_TEMPERATURE", "0.2"))
     GEMINI_TOP_P: float = float(os.getenv("GEMINI_TOP_P", "0.95"))
     

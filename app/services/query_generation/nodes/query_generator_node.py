@@ -245,6 +245,10 @@ async def generate_with_llm_guidance(state, llm):
 async def generate_syntax_fix_query(state, llm, instructions, complexity):
     """Generate query focusing on syntax fixes while maintaining structure."""
     try:
+        # Retrieve glossary from directives
+        glossary = await get_glossary_from_directives(state.directives)
+        glossary_text = format_glossary_for_prompt(glossary)
+
         # Create syntax-focused prompt
         syntax_prompt = f"""
 You are fixing KDB+/q syntax errors while maintaining the query's logic and complexity level.
@@ -258,6 +262,7 @@ Syntax Fix Instructions:
 
 Available Schema:
 {format_schema_for_generation(state.query_schema)}
+{glossary_text}
 
 Focus on:
 1. Fixing syntax errors identified in the feedback
@@ -278,6 +283,10 @@ Generate the corrected query with proper syntax:
 async def generate_schema_fix_query(state, llm, instructions, complexity):
     """Generate query focusing on schema reference corrections."""
     try:
+        # Retrieve glossary from directives
+        glossary = await get_glossary_from_directives(state.directives)
+        glossary_text = format_glossary_for_prompt(glossary)
+
         # Create schema-focused prompt
         schema_prompt = f"""
 You are fixing schema reference errors while maintaining query logic.
@@ -291,10 +300,11 @@ Schema Correction Instructions:
 
 Available Schema (USE THESE EXACT REFERENCES):
 {format_schema_for_generation(state.query_schema)}
+{glossary_text}
 
 Focus on:
 1. Using correct table names from the available schema
-2. Using correct column names from the available schema  
+2. Using correct column names from the available schema
 3. Maintaining the current query complexity ({complexity})
 4. Preserving the original query intent and logic
 
@@ -314,6 +324,10 @@ async def generate_complexity_escalated_query(state, llm, instructions, new_comp
         # Get complexity guidance for the new level
         complexity_guidance, kdb_notes = get_complexity_guidance(new_complexity, state.execution_plan)
 
+        # Retrieve glossary from directives
+        glossary = await get_glossary_from_directives(state.directives)
+        glossary_text = format_glossary_for_prompt(glossary)
+
         # Create complexity escalation prompt
         escalation_prompt = f"""
 You are escalating query complexity based on validation feedback.
@@ -330,6 +344,7 @@ Escalation Instructions:
 
 Available Schema:
 {format_schema_for_generation(state.query_schema)}
+{glossary_text}
 
 {kdb_notes}
 
@@ -431,6 +446,10 @@ async def generate_retry_query(state, llm):
 
         few_shot_text = format_few_shot_examples(few_shot_examples)
 
+        # Retrieve glossary from directives
+        glossary = await get_glossary_from_directives(state.directives)
+        glossary_text = format_glossary_for_prompt(glossary)
+
         # Create retry-specific prompt
         prompt = ChatPromptTemplate.from_template(RETRY_GENERATION_PROMPT)
         chain = prompt | llm
@@ -446,7 +465,8 @@ async def generate_retry_query(state, llm):
             "feedback_trail": feedback_trail_text,
             "key_context": key_context_text,
             "schema": format_schema_for_retry(state.query_schema),
-            "few_shot_examples": few_shot_text
+            "few_shot_examples": few_shot_text,
+            "glossary": glossary_text
         }
 
         # Get response from LLM
@@ -522,6 +542,16 @@ async def generate_initial_query(state, llm, additional_guidance=""):
         # Get complexity-specific guidance and KDB notes
         complexity_guidance, kdb_notes = get_complexity_guidance(query_complexity, execution_plan)
 
+        # Retrieve and format glossary from directives
+        glossary = {}
+        try:
+            glossary = await get_glossary_from_directives(directives)
+            if glossary:
+                state.thinking.append(f"📖 Loaded business glossary with {len(glossary)} terms from {len(directives)} directive(s)")
+        except Exception as e:
+            logger.error(f"Error loading glossary: {str(e)}")
+            state.thinking.append(f"⚠️ Could not load glossary: {str(e)}")
+
         # Construct the final prompt with all components
         final_prompt_template = f"{GENERATOR_PROMPT_TEMPLATE}\n\n{few_shot_examples}\n{essence_context}\n{summary_context}{conversation_context}\n{additional_guidance}"
         prompt = ChatPromptTemplate.from_template(final_prompt_template)
@@ -539,7 +569,8 @@ async def generate_initial_query(state, llm, additional_guidance=""):
             "conversation_context": conversation_context,
             "complexity_guidance": complexity_guidance,
             "kdb_notes": kdb_notes,
-            "query_complexity": query_complexity
+            "query_complexity": query_complexity,
+            "glossary": format_glossary_for_prompt(glossary)
         }
 
         # Get the response from the LLM
@@ -645,5 +676,122 @@ def format_schema_for_retry(schema):
                             col_type = col.get("type", col.get("kdb_type", "unknown"))
                             col_desc = col.get("description", col.get("column_desc", ""))
                             formatted += f"  - {col_name} ({col_type}): {col_desc}\n"
+
+    return formatted
+
+async def get_glossary_from_directives(directives: list) -> Dict[str, str]:
+    """
+    Retrieve and combine glossaries from multiple directives (schema group names).
+
+    Args:
+        directives: List of schema group names (directives)
+
+    Returns:
+        Combined dictionary of glossary terms from all directives
+        If there are duplicate terms, later directives override earlier ones
+    """
+    combined_glossary = {}
+
+    if not directives or not isinstance(directives, list):
+        return combined_glossary
+
+    try:
+        for directive in directives:
+            if directive:  # Skip empty directives
+                glossary = await get_glossary_for_schema_group(directive)
+                # Merge glossaries - later directives can override earlier ones
+                combined_glossary.update(glossary)
+
+        if combined_glossary:
+            logger.info(f"Combined glossary from {len(directives)} directive(s): {len(combined_glossary)} total terms")
+
+        return combined_glossary
+
+    except Exception as e:
+        logger.error(f"Error retrieving glossary from directives: {str(e)}", exc_info=True)
+        return {}
+
+async def get_glossary_from_schema(schema: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Helper function to retrieve glossary from schema object.
+
+    DEPRECATED: Use get_glossary_from_directives() instead as directives contain schema group names.
+
+    Args:
+        schema: The schema dictionary containing schema_group_name
+
+    Returns:
+        Dictionary of glossary terms, or empty dict if not available
+    """
+    try:
+        schema_group_name = schema.get("schema", "") if isinstance(schema, dict) else ""
+        if schema_group_name:
+            return await get_glossary_for_schema_group(schema_group_name)
+        return {}
+    except Exception as e:
+        logger.error(f"Error retrieving glossary from schema: {str(e)}")
+        return {}
+
+async def get_glossary_for_schema_group(schema_group_name: str) -> Dict[str, str]:
+    """
+    Retrieve business glossary for a given schema group.
+
+    The glossary provides domain-specific term definitions to help the LLM
+    understand business terminology when generating queries.
+
+    Args:
+        schema_group_name: The schema group identifier
+
+    Returns:
+        Dictionary of term definitions (term -> definition)
+        Returns empty dict if no glossary exists for the schema group
+
+    Note:
+        Currently returns hardcoded sample data.
+        TODO: Replace with actual database retrieval when DB method is implemented.
+    """
+    try:
+        # TODO: Replace with actual database call when DB method is ready
+        # Example: return await db.get_glossary(schema_group_name)
+
+        # Hardcoded sample glossary for demonstration
+        sample_glossary = {
+            "TCA": "Transaction Cost Analysis - measurement of trading execution quality",
+            "VWAP": "Volume Weighted Average Price - average price weighted by volume",
+            "TWAP": "Time Weighted Average Price - average price weighted by time",
+            "notional": "The total value of a position, calculated as price × quantity",
+            "fill": "An executed order or a partial execution of an order",
+            "slippage": "The difference between expected execution price and actual execution price",
+            "spread": "The difference between the bid and ask price",
+            "liquidity": "The ability to buy or sell an asset without causing significant price movement",
+            "market impact": "The effect of a trade on the market price of the security",
+            "alpha": "Excess return of an investment relative to a benchmark index"
+        }
+
+        logger.info(f"Retrieved glossary for schema group: {schema_group_name} ({len(sample_glossary)} terms)")
+        return sample_glossary
+
+    except Exception as e:
+        logger.error(f"Error retrieving glossary for schema group {schema_group_name}: {str(e)}", exc_info=True)
+        return {}
+
+def format_glossary_for_prompt(glossary: Dict[str, str]) -> str:
+    """
+    Format glossary as text for inclusion in LLM prompts.
+
+    Args:
+        glossary: Dictionary of term definitions
+
+    Returns:
+        Formatted string for prompt inclusion, or empty string if no glossary
+    """
+    if not glossary:
+        return ""
+
+    formatted = "\n\nBusiness Glossary:\n"
+    formatted += "The following terms have specific meanings in this domain. Use these definitions when interpreting the user's query:\n\n"
+
+    for term, definition in glossary.items():
+        formatted += f"  • {term}: {definition}\n"
 
     return formatted

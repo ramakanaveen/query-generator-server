@@ -25,11 +25,18 @@ class QueryResponse(BaseModel):
     response_type: str = Field(default="query", description="Type of response (query, schema_description, help)")
     execution_id: str = Field(..., description="ID for tracking execution")
     thinking: Optional[List[str]] = Field(default=None, description="LLM thinking steps")
+    query_complexity: str = Field(default="SINGLE_LINE", description="Query complexity level (SINGLE_LINE or MULTI_LINE)")
+
+class PaginationParams(BaseModel):
+    page: int = Field(default=0, description="Page number (0-indexed)")
+    page_size: int = Field(default=100, description="Number of records per page")
 
 class ExecutionRequest(BaseModel):
     query: str = Field(..., description="The database query to execute")
     execution_id: str = Field(..., description="ID from the query generation")
     params: Optional[Dict[str, Any]] = Field(default={}, description="Query parameters")
+    pagination: Optional[PaginationParams] = Field(default=None, description="Pagination parameters")
+    query_complexity: Optional[str] = Field(default="MULTI_LINE", description="Query complexity (SINGLE_LINE or MULTI_LINE) - defaults to MULTI_LINE for safety")
 
 class ExecutionResponse(BaseModel):
     """

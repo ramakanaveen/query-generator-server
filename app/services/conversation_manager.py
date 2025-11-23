@@ -638,3 +638,471 @@ class ConversationManager:
                 "recent_messages": [],
                 "conversation_summary": None
             }
+
+    # ==========================================
+    # SHARE MANAGEMENT METHODS
+    # ==========================================
+
+    async def create_share(
+        self,
+        conversation_id: str,
+        shared_by: str,
+        access_level: str = "view",
+        expires_at: Optional[datetime] = None,
+        shared_with: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Create a shareable link for a conversation.
+
+        Args:
+            conversation_id: ID of conversation to share
+            shared_by: User ID creating the share
+            access_level: 'view' or 'edit' (only 'view' supported now)
+            expires_at: Optional expiry datetime
+            shared_with: Optional specific user ID, None for public link
+
+        Returns:
+            {
+                "id": int,
+                "share_token": str,
+                "conversation_id": str,
+                "access_level": str,
+                "expires_at": datetime,
+                "created_at": datetime
+            }
+        """
+        import secrets
+
+        try:
+            # Verify user owns the conversation
+            conn = await self._get_db_connection()
+            try:
+                owner_id = await conn.fetchval(
+                    "SELECT user_id FROM conversations WHERE id = $1",
+                    conversation_id
+                )
+
+                if not owner_id:
+                    raise ValueError(f"Conversation {conversation_id} not found")
+
+                if owner_id != shared_by:
+                    raise ValueError(f"User {shared_by} does not own conversation {conversation_id}")
+
+                # Generate secure token
+                share_token = secrets.token_urlsafe(32)
+
+                # Insert share record
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO shared_conversations
+                    (conversation_id, share_token, shared_by, access_level, expires_at, shared_with)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING id, conversation_id, share_token, shared_by, access_level,
+                              expires_at, created_at, shared_with, is_active
+                    """,
+                    conversation_id,
+                    share_token,
+                    shared_by,
+                    access_level,
+                    expires_at,
+                    shared_with
+                )
+
+                result = dict(row)
+                logger.info(f"Created share for conversation {conversation_id} by {shared_by}")
+                return result
+
+            finally:
+                await db_pool.release_connection(conn)
+
+        except Exception as e:
+            logger.error(f"Error creating share: {str(e)}", exc_info=True)
+            raise
+
+    async def get_share_by_token(
+        self,
+        share_token: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get share details by token.
+        Validates token is active and not expired.
+
+        Returns None if token is invalid, expired, or inactive.
+        """
+        try:
+            conn = await self._get_db_connection()
+            try:
+                row = await conn.fetchrow(
+                    """
+                    SELECT
+                        sc.*,
+                        c.user_id as owner_id,
+                        c.title as conversation_title
+                    FROM shared_conversations sc
+                    INNER JOIN conversations c ON sc.conversation_id = c.id
+                    WHERE sc.share_token = $1
+                      AND sc.is_active = true
+                    """,
+                    share_token
+                )
+
+                if not row:
+                    return None
+
+                share = dict(row)
+
+                # Check if expired
+                if share['expires_at'] and share['expires_at'] < datetime.now(share['expires_at'].tzinfo):
+                    logger.warning(f"Share token {share_token} has expired")
+                    return None
+
+                return share
+
+            finally:
+                await db_pool.release_connection(conn)
+
+        except Exception as e:
+            logger.error(f"Error getting share by token: {str(e)}", exc_info=True)
+            return None
+
+    async def get_conversation_shares(
+        self,
+        conversation_id: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Get all shares for a conversation.
+        Used by owner to see who has access.
+        """
+        try:
+            conn = await self._get_db_connection()
+            try:
+                rows = await conn.fetch(
+                    """
+                    SELECT
+                        id,
+                        conversation_id,
+                        share_token,
+                        shared_by,
+                        shared_with,
+                        access_level,
+                        is_active,
+                        created_at,
+                        expires_at,
+                        access_count,
+                        last_accessed_at,
+                        metadata
+                    FROM shared_conversations
+                    WHERE conversation_id = $1
+                    ORDER BY created_at DESC
+                    """,
+                    conversation_id
+                )
+
+                return [dict(row) for row in rows]
+
+            finally:
+                await db_pool.release_connection(conn)
+
+        except Exception as e:
+            logger.error(f"Error getting conversation shares: {str(e)}", exc_info=True)
+            return []
+
+    async def revoke_share(
+        self,
+        share_id: int,
+        user_id: str
+    ) -> bool:
+        """
+        Revoke a share (set is_active = false).
+        Only owner can revoke.
+
+        Returns True if revoked, False if not found or unauthorized.
+        """
+        try:
+            conn = await self._get_db_connection()
+            try:
+                # Verify user owns the conversation
+                owner_id = await conn.fetchval(
+                    """
+                    SELECT c.user_id
+                    FROM shared_conversations sc
+                    INNER JOIN conversations c ON sc.conversation_id = c.id
+                    WHERE sc.id = $1
+                    """,
+                    share_id
+                )
+
+                if not owner_id:
+                    logger.warning(f"Share {share_id} not found")
+                    return False
+
+                if owner_id != user_id:
+                    logger.warning(f"User {user_id} attempted to revoke share {share_id} owned by {owner_id}")
+                    return False
+
+                # Revoke the share
+                result = await conn.execute(
+                    """
+                    UPDATE shared_conversations
+                    SET is_active = false
+                    WHERE id = $1
+                    """,
+                    share_id
+                )
+
+                logger.info(f"Revoked share {share_id}")
+                return True
+
+            finally:
+                await db_pool.release_connection(conn)
+
+        except Exception as e:
+            logger.error(f"Error revoking share: {str(e)}", exc_info=True)
+            return False
+
+    async def check_conversation_access(
+        self,
+        conversation_id: str,
+        user_id: str,
+        share_token: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Check user's access level to a conversation.
+
+        Returns:
+            {
+                "has_access": bool,
+                "access_level": "owner" | "view" | "edit" | None,
+                "can_view": bool,
+                "can_edit": bool,
+                "can_add_messages": bool,
+                "is_owner": bool,
+                "error": Optional[str]
+            }
+        """
+        try:
+            conn = await self._get_db_connection()
+            try:
+                # Check if user is the owner
+                owner_id = await conn.fetchval(
+                    "SELECT user_id FROM conversations WHERE id = $1",
+                    conversation_id
+                )
+
+                if not owner_id:
+                    return {
+                        "has_access": False,
+                        "access_level": None,
+                        "can_view": False,
+                        "can_edit": False,
+                        "can_add_messages": False,
+                        "is_owner": False,
+                        "error": "Conversation not found"
+                    }
+
+                if owner_id == user_id:
+                    return {
+                        "has_access": True,
+                        "access_level": "owner",
+                        "can_view": True,
+                        "can_edit": True,
+                        "can_add_messages": True,
+                        "is_owner": True
+                    }
+
+                # Check if conversation is shared with this user
+                # First try by share_token if provided
+                if share_token:
+                    share = await conn.fetchrow(
+                        """
+                        SELECT access_level, expires_at, is_active
+                        FROM shared_conversations
+                        WHERE conversation_id = $1
+                          AND share_token = $2
+                          AND is_active = true
+                        """,
+                        conversation_id,
+                        share_token
+                    )
+                else:
+                    # Try by user_id (specific share)
+                    share = await conn.fetchrow(
+                        """
+                        SELECT access_level, expires_at, is_active
+                        FROM shared_conversations
+                        WHERE conversation_id = $1
+                          AND (shared_with = $2 OR shared_with IS NULL)
+                          AND is_active = true
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        """,
+                        conversation_id,
+                        user_id
+                    )
+
+                if share:
+                    # Check if expired
+                    if share['expires_at'] and share['expires_at'] < datetime.now(share['expires_at'].tzinfo):
+                        return {
+                            "has_access": False,
+                            "access_level": None,
+                            "can_view": False,
+                            "can_edit": False,
+                            "can_add_messages": False,
+                            "is_owner": False,
+                            "error": "Share link has expired"
+                        }
+
+                    access_level = share['access_level']
+                    return {
+                        "has_access": True,
+                        "access_level": access_level,
+                        "can_view": True,
+                        "can_edit": access_level == "edit",
+                        "can_add_messages": access_level == "edit",
+                        "is_owner": False
+                    }
+
+                # No access
+                return {
+                    "has_access": False,
+                    "access_level": None,
+                    "can_view": False,
+                    "can_edit": False,
+                    "can_add_messages": False,
+                    "is_owner": False,
+                    "error": "No access to this conversation"
+                }
+
+            finally:
+                await db_pool.release_connection(conn)
+
+        except Exception as e:
+            logger.error(f"Error checking conversation access: {str(e)}", exc_info=True)
+            return {
+                "has_access": False,
+                "access_level": None,
+                "can_view": False,
+                "can_edit": False,
+                "can_add_messages": False,
+                "is_owner": False,
+                "error": f"Error checking access: {str(e)}"
+            }
+
+    async def get_shared_conversation(
+        self,
+        share_token: str,
+        increment_access_count: bool = True
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get conversation via share token.
+        Validates access and increments tracking.
+        """
+        try:
+            # Get and validate share
+            share = await self.get_share_by_token(share_token)
+
+            if not share:
+                return None
+
+            # Get the conversation
+            conversation = await self.get_conversation(share['conversation_id'])
+
+            if not conversation:
+                return None
+
+            # Update access tracking
+            if increment_access_count:
+                await self.update_share_access_tracking(share_token)
+
+            # Add share info to conversation
+            conversation['shared_by'] = share['shared_by']
+            conversation['access_level'] = share['access_level']
+            conversation['share_info'] = {
+                'share_token': share_token,
+                'access_level': share['access_level'],
+                'shared_by': share['shared_by'],
+                'expires_at': share['expires_at'].isoformat() if share['expires_at'] else None,
+                'access_count': share['access_count']
+            }
+
+            return conversation
+
+        except Exception as e:
+            logger.error(f"Error getting shared conversation: {str(e)}", exc_info=True)
+            return None
+
+    async def update_share_access_tracking(
+        self,
+        share_token: str
+    ) -> None:
+        """
+        Update access_count and last_accessed_at for analytics.
+        """
+        try:
+            conn = await self._get_db_connection()
+            try:
+                await conn.execute(
+                    """
+                    UPDATE shared_conversations
+                    SET access_count = access_count + 1,
+                        last_accessed_at = $1
+                    WHERE share_token = $2
+                    """,
+                    datetime.now(),
+                    share_token
+                )
+            finally:
+                await db_pool.release_connection(conn)
+
+        except Exception as e:
+            logger.error(f"Error updating share access tracking: {str(e)}", exc_info=True)
+
+    async def get_user_shared_conversations(
+        self,
+        user_id: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Get all conversations shared WITH this user.
+        Used in conversation list to show "Shared With Me" section.
+        """
+        try:
+            conn = await self._get_db_connection()
+            try:
+                rows = await conn.fetch(
+                    """
+                    SELECT
+                        c.*,
+                        sc.shared_by,
+                        sc.access_level,
+                        sc.share_token,
+                        sc.created_at as shared_at,
+                        'shared' as ownership
+                    FROM conversations c
+                    INNER JOIN shared_conversations sc ON c.id = sc.conversation_id
+                    WHERE (sc.shared_with = $1 OR sc.shared_with IS NULL)
+                      AND sc.is_active = true
+                      AND (sc.expires_at IS NULL OR sc.expires_at > $2)
+                    ORDER BY sc.created_at DESC
+                    """,
+                    user_id,
+                    datetime.now()
+                )
+
+                conversations = []
+                for row in rows:
+                    conv = self._parse_json_fields(dict(row), ['messages', 'metadata'])
+                    # For listing, we don't need full messages
+                    message_count = len(conv.get("messages", []))
+                    conv["message_count"] = message_count
+                    conv["messages"] = []  # Clear messages for listing
+                    conversations.append(conv)
+
+                return conversations
+
+            finally:
+                await db_pool.release_connection(conn)
+
+        except Exception as e:
+            logger.error(f"Error getting user shared conversations: {str(e)}", exc_info=True)
+            return []
