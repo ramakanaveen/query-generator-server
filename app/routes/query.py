@@ -15,6 +15,7 @@ from app.services.llm_provider import LLMProvider
 from app.services.conversation_manager import ConversationManager
 from app.services.query_generator import QueryGenerator  # Already enhanced
 from app.services.database_connector import DatabaseConnector
+from app.services.connectors import get_connector
 from app.core.logging import logger
 
 router = APIRouter()
@@ -593,3 +594,117 @@ async def execute_query_v2(
 
     except Exception as e:
         raise handle_execution_error(e, "[V2]")
+
+
+@router.post("/execute/v3", response_model=ExecutionResponse)
+async def execute_query_v3(request: ExecutionRequest):
+    """
+    V3 ENDPOINT - Universal database execution with connector factory architecture
+
+    Supports multiple database types:
+    - KDB: KDB+/q time-series database
+    - Starburst/Trino: Distributed SQL query engine
+    - PostgreSQL: Relational database (coming soon)
+    - MySQL: Relational database (coming soon)
+
+    Features:
+    - Database-agnostic execution via connector factory
+    - Optimized pagination at database level
+    - Connection pooling and management
+    - Query sanitization and security
+    - Per-database query optimization
+
+    Query Complexity (KDB only):
+    - SINGLE_LINE: Optimized count + pagination for simple queries
+    - MULTI_LINE: Safe wrapping for complex/multi-statement queries
+    """
+    start_time = time.time()
+
+    try:
+        # Extract values from the request
+        query = request.query
+        execution_id = request.execution_id
+        database_type = request.database_type
+        params = request.params or {}
+        query_complexity = request.query_complexity or "MULTI_LINE"  # Safe default for KDB
+
+        # Default pagination values
+        page = 0
+        page_size = 100
+
+        # Extract pagination if provided
+        if request.pagination is not None:
+            page = request.pagination.page
+            page_size = request.pagination.page_size
+
+        # Validate pagination parameters
+        if page < 0:
+            logger.warning(f"[V3] Invalid page number: {page}")
+            raise HTTPException(
+                status_code=400,
+                detail="Page number must be non-negative. Please check your pagination settings."
+            )
+
+        if page_size <= 0 or page_size > 10000:
+            logger.warning(f"[V3] Invalid page size: {page_size}")
+            raise HTTPException(
+                status_code=400,
+                detail="Page size must be between 1 and 10,000. Please adjust your pagination settings."
+            )
+
+        logger.info(f"🚀 [V3] Executing query on {database_type.upper()}")
+        if database_type.lower() == "kdb":
+            logger.info(f"📐 [V3] Query complexity: {query_complexity}")
+
+        # Get appropriate connector based on database type
+        # Use connection_params from request if provided, otherwise use defaults from settings
+        try:
+            connection_params = request.connection_params or {}
+            connector = get_connector(database_type=database_type, **connection_params)
+        except (ValueError, NotImplementedError) as e:
+            logger.error(f"[V3] Unsupported database type: {database_type}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported database type: {database_type}. {str(e)}"
+            )
+
+        # Execute query with pagination at database level
+        # For KDB: Pass query_complexity in kwargs
+        # For SQL databases: query_complexity is ignored
+        kwargs = {}
+        if database_type.lower() == "kdb":
+            kwargs["query_complexity"] = query_complexity
+
+        results, metadata, total_count = await connector.execute_paginated(
+            query=query,
+            page=page,
+            page_size=page_size,
+            params=params,
+            **kwargs
+        )
+
+        # Calculate pagination info
+        total_pages = math.ceil(total_count / page_size) if total_count > 0 else 1
+
+        total_time = time.time() - start_time
+        logger.info(f"⏱️ [V3] Query execution time: {total_time:.4f} seconds")
+        logger.info(f"📊 [V3] Returned {len(results)} of {total_count} total records (page {page + 1}/{total_pages})")
+
+        return ExecutionResponse(
+            results=results,
+            metadata=metadata,
+            pagination={
+                "currentPage": page,
+                "totalPages": total_pages,
+                "totalRows": total_count,
+                "pageSize": page_size,
+                "returnedRows": len(results)
+            }
+        )
+
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+
+    except Exception as e:
+        raise handle_execution_error(e, "[V3]")

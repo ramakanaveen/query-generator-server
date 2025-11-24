@@ -45,7 +45,16 @@ class Settings(BaseSettings):
     # KDB settings
     KDB_HOST: str = os.getenv("KDB_HOST", "localhost")
     KDB_PORT: int = int(os.getenv("KDB_PORT", "5001"))
-    
+
+    # Starburst/Trino settings
+    STARBURST_HOST: str = os.getenv("STARBURST_HOST", "localhost")
+    STARBURST_PORT: int = int(os.getenv("STARBURST_PORT", "8080"))
+    STARBURST_CATALOG: str = os.getenv("STARBURST_CATALOG", "hive")
+    STARBURST_SCHEMA: str = os.getenv("STARBURST_SCHEMA", "default")
+    STARBURST_USER: str = os.getenv("STARBURST_USER", "admin")
+    STARBURST_PASSWORD: str = os.getenv("STARBURST_PASSWORD", "")
+    STARBURST_USE_HTTPS: bool = os.getenv("STARBURST_USE_HTTPS", "True").lower() in ("true", "1", "t")
+
     # CORS settings
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",  # React development server

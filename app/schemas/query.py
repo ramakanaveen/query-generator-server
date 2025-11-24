@@ -34,9 +34,11 @@ class PaginationParams(BaseModel):
 class ExecutionRequest(BaseModel):
     query: str = Field(..., description="The database query to execute")
     execution_id: str = Field(..., description="ID from the query generation")
+    database_type: str = Field(default="kdb", description="Database type: kdb, starburst, trino, postgres, mysql")
     params: Optional[Dict[str, Any]] = Field(default={}, description="Query parameters")
     pagination: Optional[PaginationParams] = Field(default=None, description="Pagination parameters")
-    query_complexity: Optional[str] = Field(default="MULTI_LINE", description="Query complexity (SINGLE_LINE or MULTI_LINE) - defaults to MULTI_LINE for safety")
+    query_complexity: Optional[str] = Field(default="MULTI_LINE", description="Query complexity (SINGLE_LINE or MULTI_LINE) - KDB only, defaults to MULTI_LINE for safety")
+    connection_params: Optional[Dict[str, Any]] = Field(default=None, description="Optional connection parameters override (host, port, etc.). If not provided, uses settings from config.")
 
 class ExecutionResponse(BaseModel):
     """
