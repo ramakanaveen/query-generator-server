@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 import uuid
 import json
 from typing import Dict, Any, List
+from datetime import datetime
 
 from app.core.config import settings
 from app.schemas.query import QueryRequest, QueryResponse, ExecutionRequest, ExecutionResponse
@@ -16,6 +17,7 @@ from app.services.conversation_manager import ConversationManager
 from app.services.query_generator import QueryGenerator  # Already enhanced
 from app.services.database_connector import DatabaseConnector
 from app.services.connectors import get_connector
+from app.services.execution_tracker import ExecutionTracker
 from app.core.logging import logger
 
 router = APIRouter()
@@ -613,12 +615,14 @@ async def execute_query_v3(request: ExecutionRequest):
     - Connection pooling and management
     - Query sanitization and security
     - Per-database query optimization
+    - Async execution tracking for auditing and analytics
 
     Query Complexity (KDB only):
     - SINGLE_LINE: Optimized count + pagination for simple queries
     - MULTI_LINE: Safe wrapping for complex/multi-statement queries
     """
     start_time = time.time()
+    started_at = datetime.now()
 
     try:
         # Extract values from the request
@@ -627,6 +631,10 @@ async def execute_query_v3(request: ExecutionRequest):
         database_type = request.database_type
         params = request.params or {}
         query_complexity = request.query_complexity or "MULTI_LINE"  # Safe default for KDB
+
+        # Extract user_id if available (from request metadata or auth)
+        user_id = getattr(request, 'user_id', None)
+        conversation_id = getattr(request, 'conversation_id', None)
 
         # Default pagination values
         page = 0
@@ -690,6 +698,26 @@ async def execute_query_v3(request: ExecutionRequest):
         logger.info(f"⏱️ [V3] Query execution time: {total_time:.4f} seconds")
         logger.info(f"📊 [V3] Returned {len(results)} of {total_count} total records (page {page + 1}/{total_pages})")
 
+        # Log execution in background (non-blocking)
+        ExecutionTracker.log_execution_background(
+            execution_id=execution_id,
+            query=query,
+            database_type=database_type,
+            status="success",
+            user_id=user_id,
+            conversation_id=conversation_id,
+            query_complexity=query_complexity,
+            execution_time=total_time,
+            total_rows=total_count,
+            returned_rows=len(results),
+            page=page,
+            page_size=page_size,
+            connection_params=request.connection_params,
+            response_metadata=metadata,
+            started_at=started_at,
+            completed_at=datetime.now()
+        )
+
         return ExecutionResponse(
             results=results,
             metadata=metadata,
@@ -702,9 +730,44 @@ async def execute_query_v3(request: ExecutionRequest):
             }
         )
 
-    except HTTPException:
+    except HTTPException as he:
+        # Log failed execution for HTTP exceptions (validation errors, etc.)
+        total_time = time.time() - start_time
+        ExecutionTracker.log_execution_background(
+            execution_id=execution_id,
+            query=query,
+            database_type=database_type,
+            status="failed",
+            user_id=user_id,
+            conversation_id=conversation_id,
+            query_complexity=query_complexity,
+            execution_time=total_time,
+            error_message=he.detail,
+            error_type="HTTPException",
+            connection_params=request.connection_params,
+            started_at=started_at,
+            completed_at=datetime.now()
+        )
         # Re-raise HTTP exceptions as-is
         raise
 
     except Exception as e:
+        # Log failed execution for general exceptions
+        total_time = time.time() - start_time
+        error_type = type(e).__name__
+        ExecutionTracker.log_execution_background(
+            execution_id=execution_id,
+            query=query,
+            database_type=database_type,
+            status="error" if "timeout" not in str(e).lower() else "timeout",
+            user_id=user_id,
+            conversation_id=conversation_id,
+            query_complexity=query_complexity,
+            execution_time=total_time,
+            error_message=str(e),
+            error_type=error_type,
+            connection_params=request.connection_params,
+            started_at=started_at,
+            completed_at=datetime.now()
+        )
         raise handle_execution_error(e, "[V3]")
