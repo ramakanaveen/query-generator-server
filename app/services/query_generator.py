@@ -1,4 +1,4 @@
-# app/services/query_generator.py - Final Enhanced Version
+# app/services/query_generator.py - Unified Pipeline Version
 import time
 from typing import Tuple, List, Dict, Any, Optional, Union
 import uuid
@@ -6,19 +6,19 @@ from langgraph.graph import StateGraph, END
 from pydantic import BaseModel, Field
 from app.core.logging import logger
 from app.services.caching.cache_manager import get_cache_manager
+
+# Import unified nodes (v3 architecture)
 from app.services.query_generation.nodes import (
-    intent_classifier,
     schema_description_node,
-    schema_retriever,
-    query_generator_node,
-    query_validator,
-    query_refiner,
-    intelligent_analyzer, enhanced_schema_retriever,
     initial_processor
 )
+from app.services.query_generation.nodes.unified_analyzer_generator import unified_analyze_and_generate
+from app.services.query_generation.nodes.kdb_validator import validate_kdb_query
+from app.services.query_generation.nodes.sql_validator import validate_sql_query
+
 from app.core.langfuse_client import langfuse_client
 
-# Import the enhanced state model
+# Import the state model
 from app.services.query_generator_state import QueryGenerationState
 
 class QueryGenerator:
@@ -48,49 +48,49 @@ class QueryGenerator:
             self.cache_manager = None
             logger.info("Cache disabled")
     def _build_complete_enhanced_workflow(self) -> StateGraph:
-        """Build the complete enhanced LangGraph workflow with new architecture."""
-        # Initialize the workflow with enhanced state
+        """
+        Build the unified workflow with thinking/reasoning model (v3).
+
+        Simplified flow:
+        initial_processor → unified_analyzer_generator → validator (KDB/SQL) → retry or end
+        """
+        # Initialize the workflow with state
         workflow = StateGraph(QueryGenerationState)
 
-        # Add all the enhanced nodes
-        # Add all the enhanced nodes
+        # Add unified nodes (v3 architecture)
         workflow.add_node("initial_processor", initial_processor.process_initial_request)
-        workflow.add_node("intent_classifier", intent_classifier.classify_intent) # Kept for individual testing if needed
-        workflow.add_node("schema_retriever", enhanced_schema_retriever.retrieve_schema_with_examples)
-        workflow.add_node("intelligent_analyzer", intelligent_analyzer.intelligent_analyze_query)
-        workflow.add_node("query_generator", query_generator_node.generate_query)
-        workflow.add_node("query_validator", query_validator.validate_query)
-        workflow.add_node("query_refiner", query_refiner.refine_query)  # Legacy fallback
+        workflow.add_node("unified_analyzer_generator", unified_analyze_and_generate)
+        workflow.add_node("kdb_validator", validate_kdb_query)
+        workflow.add_node("sql_validator", validate_sql_query)
         workflow.add_node("schema_description", schema_description_node.generate_schema_description)
 
-        # Set the entrypoint to parallel processor
+        # Set the entrypoint
         workflow.set_entry_point("initial_processor")
 
-        # Add routing based on intent type (from initial_processor)
+        # Route after initial processing (intent classification + schema retrieval)
         workflow.add_conditional_edges(
             "initial_processor",
             self._route_after_initial_processing
         )
 
-        # Query generation path: initial_processor -> intelligent_analyzer -> generation -> validation
-        # Note: schema retrieval is already done in initial_processor
-        workflow.add_edge("intelligent_analyzer", "query_generator")
-        workflow.add_edge("query_generator", "query_validator")
-
-        # Schema description path: direct to description generation
-        workflow.add_edge("schema_description", END)
-
-        # Enhanced validation feedback loops with LLM-driven decisions
+        # Unified analyzer-generator routes to appropriate validator
         workflow.add_conditional_edges(
-            "query_validator",
-            self._route_after_enhanced_validation
+            "unified_analyzer_generator",
+            self._route_to_validator
         )
 
-        # Re-analysis loop (from validator feedback to intelligent analyzer)
-        # This creates the intelligent feedback loop
+        # Validation routes to retry or end
+        workflow.add_conditional_edges(
+            "kdb_validator",
+            self._route_after_validation
+        )
+        workflow.add_conditional_edges(
+            "sql_validator",
+            self._route_after_validation
+        )
 
-        # Legacy refinement fallback
-        workflow.add_edge("query_refiner", "query_generator")
+        # Schema description path: direct to end
+        workflow.add_edge("schema_description", END)
 
         # Compile the workflow
         return workflow.compile()
@@ -102,70 +102,47 @@ class QueryGenerator:
         if intent_type == "schema_description":
             return "schema_description"
         elif intent_type == "help":
-            # For help requests, we could add a dedicated help node
-            # For now, route to schema_description which can handle help
             return "schema_description"
         else:
-            # Default to query generation path
-            # Schema retrieval is already done in parallel processor
-            return "intelligent_analyzer"
+            # Route to unified analyzer-generator (v3 architecture)
+            return "unified_analyzer_generator"
 
-    def _route_after_intent_classification(self, state: QueryGenerationState) -> str:
-        """Route based on intent classification results."""
-        intent_type = state.intent_type
+    def _route_to_validator(self, state: QueryGenerationState) -> str:
+        """Route to appropriate validator based on database type."""
+        database_type = state.database_type.lower()
 
-        if intent_type == "schema_description":
-            return "schema_description"
-        elif intent_type == "help":
-            # For help requests, we could add a dedicated help node
-            # For now, route to schema_description which can handle help
-            return "schema_description"
+        # Route to SQL validator for SQL databases
+        if database_type in ["starburst", "trino", "postgres", "postgresql", "mysql", "sql"]:
+            return "sql_validator"
         else:
-            # Default to query generation path
-            return "schema_retriever"
+            # Default to KDB validator
+            return "kdb_validator"
 
-    def _route_after_enhanced_validation(self, state: QueryGenerationState) -> str:
+    def _route_after_validation(self, state: QueryGenerationState) -> str:
         """
-        Enhanced routing after validation with complete LLM-driven feedback analysis.
+        Simple routing after validation with retry logic.
 
-        This implements the intelligent feedback loop that replaces blind retry loops.
+        Max 2 retries on validation failure, then graceful failure.
         """
-
         # If validation passed, we're done
         if state.validation_result:
             return END
 
-        # Validation failed - apply intelligent routing based on LLM analysis
+        # Validation failed - check retry count
+        retry_count = getattr(state, 'retry_count', 0)
+        max_retries = 2
 
-        # 1. Check if LLM detected need for re-analysis (from validator)
-        if getattr(state, 'needs_reanalysis', False):
-            # Check escalation limits
-            if state.escalation_count < state.max_escalations:
-                # Increment escalation count BEFORE routing
-                state.escalation_count += 1
-                state.thinking.append(f"🔄 Routing to intelligent analyzer for re-analysis (escalation {state.escalation_count}/{state.max_escalations})")
-                return "intelligent_analyzer"
-            else:
-                state.thinking.append(f"⚠️ Max escalations reached ({state.escalation_count}/{state.max_escalations}), trying legacy refinement")
-                # Fall through to refinement check below
-
-        # 2. Check if schema reselection is needed
-        elif getattr(state, 'needs_schema_reselection', False):
-            state.thinking.append("🔄 Routing to schema retriever for reselection")
-            return "schema_retriever"
-
-        # 3. Try legacy refinement if we haven't exceeded limits
-        elif state.refinement_count < state.max_refinements:
-            state.thinking.append("🔧 Routing to legacy refiner")
-            state.refinement_count += 1
-            return "query_refiner"
-
-        # 4. All options exhausted - graceful failure
+        if retry_count < max_retries:
+            # Increment retry count and retry with feedback
+            state.retry_count = retry_count + 1
+            state.thinking.append(f"🔄 Retry attempt {state.retry_count}/{max_retries} with validation feedback")
+            return "unified_analyzer_generator"
         else:
+            # Max retries exhausted - graceful failure
             failure_reason = self._determine_failure_reason(state)
-            state.thinking.append(f"❌ All enhancement options exhausted: {failure_reason}")
+            state.thinking.append(f"❌ Max retries exhausted ({max_retries}): {failure_reason}")
 
-            # Generate a helpful error message for the user
+            # Generate a helpful error message
             state.generated_query = self._generate_graceful_failure_message(state, failure_reason)
             return END
 
@@ -192,9 +169,10 @@ class QueryGenerator:
 
     def _generate_graceful_failure_message(self, state: QueryGenerationState, reason: str) -> str:
         """Generate a helpful failure message for the user."""
+        retry_count = getattr(state, 'retry_count', 0)
         base_message = f"// I apologize, but I wasn't able to generate a working query for your request.\n"
         base_message += f"// Issue: {reason}\n"
-        base_message += f"// Attempts made: {state.escalation_count} complexity escalations, {state.refinement_count} refinements\n"
+        base_message += f"// Attempts made: {retry_count + 1} generation attempts\n"
 
         # Add helpful suggestions based on the failure reason
         if "schema" in reason.lower():

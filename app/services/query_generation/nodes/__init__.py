@@ -1,51 +1,61 @@
 # app/services/query_generation/nodes/__init__.py
 
 """
-Enhanced query generation nodes with LLM-driven decision making.
+Unified query generation nodes with thinking/reasoning model.
 
-New Architecture:
+New Simplified Architecture (v3):
 1. intent_classifier - LLM-based intent classification
 2. schema_retriever - Enhanced schema retrieval with context awareness
-3. intelligent_analyzer - Schema-aware complexity and execution planning
-4. query_generator_node - Context-aware query generation
-5. query_validator - Enhanced validation with escalation triggers
-6. query_refiner - Legacy refinement for fallback scenarios
-7. schema_description_node - Schema information generation
+3. unified_analyzer_generator - Combined analysis + generation in single LLM call
+4. kdb_validator / sql_validator - LLM-based validators (database-specific)
+5. schema_description_node - Schema information generation
 
-The workflow follows this enhanced pattern:
-intent_classifier → schema_retriever → intelligent_analyzer → query_generator → validator
-                                           ↑                                      ↓
-                                           └── (LLM feedback analysis) ──────────┘
+The workflow follows this simplified pattern:
+intent_classifier → schema_retriever → unified_analyzer_generator → validator (KDB/SQL)
+                                                      ↑                    ↓
+                                                      └── (retry on fail) ─┘
 """
 
-# Import all the nodes for the enhanced workflow
+# Import all the nodes for the unified workflow
 from . import intent_classifier
 from . import schema_retriever
-from . import intelligent_analyzer
-from . import query_generator_node
-from . import query_validator
-from . import query_refiner
 from . import schema_description_node
+from . import initial_processor
+from . import enhanced_schema_retriever
+
+# Import unified nodes (v3)
+from .unified_analyzer_generator import unified_analyze_and_generate
+from .kdb_validator import validate_kdb_query
+from .sql_validator import validate_sql_query
 
 # Legacy imports for backward compatibility
-from . import query_analyzer  # Will be deprecated
-from . import unified_query_analyzer  # Will be deprecated
+from . import intelligent_analyzer  # v2 - will be deprecated
+from . import query_generator_node  # v2 - will be deprecated
+from . import query_validator  # v2 - will be deprecated
+from . import query_refiner  # v2 - will be deprecated
+from . import query_analyzer  # v1 - deprecated
+from . import unified_query_analyzer  # v1 - deprecated
 
 __all__ = [
-    # New enhanced nodes
-    'intent_classifier',
-    'intelligent_analyzer',
+    # v3 unified nodes
+    'unified_analyze_and_generate',
+    'validate_kdb_query',
+    'validate_sql_query',
 
-    # Enhanced existing nodes
+    # Core nodes (used across versions)
+    'intent_classifier',
     'schema_retriever',
+    'enhanced_schema_retriever',
+    'schema_description_node',
+    'initial_processor',
+
+    # v2 nodes (for backward compatibility)
+    'intelligent_analyzer',
     'query_generator_node',
     'query_validator',
-
-    # Existing nodes
     'query_refiner',
-    'schema_description_node',
 
-    # Legacy nodes (for backward compatibility)
+    # v1 nodes (deprecated)
     'query_analyzer',
     'unified_query_analyzer'
 ]

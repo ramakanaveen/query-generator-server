@@ -1,10 +1,22 @@
-# app/services/query_generator_state.py - Enhanced State Model
+# app/services/query_generator_state.py - Unified State Model (v3)
+
+"""
+v3 Simplifications:
+- Removed: escalation_count, max_escalations, needs_reanalysis, escalation_reason
+- Removed: recommended_action, specific_guidance (replaced by validation_feedback)
+- Removed: needs_schema_reselection, schema_changes_needed, schema_corrections_needed
+- Removed: refinement_count, max_refinements, refinement_guidance
+- Added: retry_count, validation_feedback, confidence_score
+
+New unified flow uses simple retry logic with validation feedback instead of
+complex escalation/refinement mechanisms.
+"""
 
 from typing import Tuple, List, Dict, Any, Optional, Union
 from pydantic import BaseModel, Field
 
 class QueryGenerationState(BaseModel):
-    """Enhanced state for the query generation process with LLM-driven decision making."""
+    """Unified state for the query generation process with thinking/reasoning model (v3)."""
 
     # Core request information
     query: str = Field(..., description="The original natural language query")
@@ -12,12 +24,15 @@ class QueryGenerationState(BaseModel):
     fast_llm: Optional[Any] = Field(default=None, description="The fast language model to use for simpler tasks")
     database_type: str = Field(default="kdb", description="Type of database to query")
 
-    # NEW: Intent classification results (from intent_classifier)
+    # Intent classification results
     intent_type: str = Field(default="query_generation", description="Type of intent detected")
     confidence: str = Field(default="medium", description="Classification confidence level")
     is_follow_up: bool = Field(default=False, description="Whether this is a follow-up query")
     classification_reasoning: str = Field(default="", description="Reasoning for intent classification")
     conversation_context_summary: str = Field(default="", description="Summary of conversation context")
+
+    # NEW (v3): Unified generation confidence
+    confidence_score: str = Field(default="medium", description="Overall confidence in generated query")
 
     # Enhanced directive and entity extraction
     directives: List[str] = Field(default_factory=list, description="Extracted directives from the query")
@@ -36,22 +51,18 @@ class QueryGenerationState(BaseModel):
     generated_query: Optional[str] = Field(default=None, description="Generated database query")
     generated_content: Optional[str] = Field(default=None, description="Generated content for non-query intents")
 
-    # Validation and refinement
+    # Validation
     validation_result: Optional[bool] = Field(default=None, description="Whether the query is valid")
     validation_errors: List[Union[str, Dict[str, Any]]] = Field(default_factory=list, description="Validation errors if any")
     detailed_feedback: Optional[List[Union[str, Dict[str, Any]]]] = Field(default_factory=list, description="Detailed feedback from validation")
     validation_details: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Validation details")
 
-    # NEW: Escalation and reanalysis tracking
-    escalation_count: int = Field(default=0, description="Number of complexity escalations")
-    max_escalations: int = Field(default=2, description="Maximum allowed escalations")
-    needs_reanalysis: bool = Field(default=False, description="Whether intelligent analyzer should re-analyze")
-    escalation_reason: str = Field(default="", description="Reason for complexity escalation")
+    # NEW (v3): Simple retry mechanism
+    retry_count: int = Field(default=0, description="Number of retry attempts")
+    validation_feedback: str = Field(default="", description="Validation feedback for retry attempts")
 
-    # NEW: LLM-driven feedback analysis
+    # LLM-driven feedback analysis
     primary_issue_type: str = Field(default="", description="Primary issue type from validator feedback")
-    recommended_action: str = Field(default="", description="LLM recommended action")
-    specific_guidance: str = Field(default="", description="Specific guidance for regeneration")
     generation_guidance: Dict[str, Any] = Field(default_factory=dict, description="Guidance for query generator")
 
     # NEW: Retry-specific fields (enhanced)
@@ -66,10 +77,6 @@ class QueryGenerationState(BaseModel):
     preserve_context: List[str] = Field(default_factory=list, description="Context elements to preserve")
     change_required: str = Field(default="", description="Specific changes required")
 
-    # NEW: Schema reselection and corrections
-    needs_schema_reselection: bool = Field(default=False, description="Whether schema should be reselected")
-    schema_changes_needed: str = Field(default="", description="Schema changes needed")
-    schema_corrections_needed: str = Field(default="", description="Specific schema corrections")
 
     # Conversation context (enhanced)
     conversation_id: Optional[str] = Field(default=None, description="ID of the conversation for context")
@@ -91,9 +98,6 @@ class QueryGenerationState(BaseModel):
     no_schema_found: bool = Field(default=False, description="Flag indicating if no relevant schema was found")
     original_query: Optional[str] = Field(default=None, description="Original query before refinement")
     original_errors: List[str] = Field(default_factory=list, description="Errors in the original query")
-    refinement_guidance: Optional[str] = Field(default=None, description="Guidance for query refinement")
-    refinement_count: int = Field(default=0, description="Number of refinement attempts")
-    max_refinements: int = Field(default=2, description="Maximum number of refinement attempts")
     llm_corrected_query: Optional[str] = Field(default=None, description="Corrected query from LLM")
 
     # Processing metadata
