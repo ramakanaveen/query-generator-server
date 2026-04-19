@@ -1,4 +1,5 @@
 # app/routes/feedback.py
+import asyncio
 from fastapi import APIRouter, HTTPException, Depends, Body, Request
 import uuid
 import json
@@ -17,6 +18,7 @@ from app.services.feedback_manager import FeedbackManager
 from app.services.llm_provider import LLMProvider
 from app.services.query_generator import QueryGenerator
 from app.core.logging import logger
+from app.services.agent.tools import memory_tool as _memory_tool
 
 router = APIRouter()
 
@@ -190,12 +192,19 @@ async def save_positive_feedback(request: Request):
             metadata=body.get("metadata", {})
         )
         
+        # Wire memory extraction (non-blocking, best-effort)
+        asyncio.create_task(_memory_tool.store_pattern(
+            original_query=body.get("original_query", ""),
+            generated_query=body.get("generated_query", ""),
+            user_id=body.get("user_id"),
+        ))
+
         return {
             "id": feedback.get("id", str(uuid.uuid4())),
             "status": "success",
             "message": "Positive feedback saved successfully"
         }
-    
+
     except Exception as e:
         logger.error(f"Error saving positive feedback: {str(e)}")
         logger.error(traceback.format_exc())

@@ -212,3 +212,7 @@ RETRY_INTENT_ANALYSIS_USER = """## Context
 **Conversation History**: {conversation_context}
 
 Analyze the retry request above."""
+
+
+# Backwards-compatibility alias for deprecated query_analyzer node
+INTENT_CLASSIFICATION_PROMPT = INTENT_CLASSIFICATION_SYSTEM + "\n\n" + INTENT_CLASSIFICATION_USER

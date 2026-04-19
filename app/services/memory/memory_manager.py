@@ -160,7 +160,7 @@ class MemoryManager:
 
         # Generate embedding
         embedding_text = self._build_embedding_text(memory)
-        embedding = await self.embedding_provider.embed_query(embedding_text)
+        embedding = await self.embedding_provider.get_embedding(embedding_text)
 
         # Store in database
         memory_id = await self.storage.store(memory, embedding.tolist() if hasattr(embedding, 'tolist') else embedding)
@@ -210,7 +210,7 @@ class MemoryManager:
         include_global = include_global if include_global is not None else self.config.include_global_memories
 
         # Generate query embedding
-        query_embedding = await self.embedding_provider.embed_query(query)
+        query_embedding = await self.embedding_provider.get_embedding(query)
 
         # Search using storage layer
         results = await self.storage.search_by_vector(
@@ -306,7 +306,7 @@ class MemoryManager:
             try:
                 # Generate embedding
                 embedding_text = self._build_embedding_text(memory)
-                embedding = await self.embedding_provider.embed_query(embedding_text)
+                embedding = await self.embedding_provider.get_embedding(embedding_text)
 
                 # Store
                 memory_id = await self.storage.store(

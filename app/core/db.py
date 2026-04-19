@@ -1,5 +1,6 @@
 # app/core/db.py
 import asyncpg
+from contextlib import asynccontextmanager
 from typing import Optional
 from app.core.config import settings
 from app.core.logging import logger
@@ -42,6 +43,15 @@ class DatabasePool:
             self._pool = None
             logger.info("Database connection pool closed")
     
+    @asynccontextmanager
+    async def acquire(self):
+        """Context manager compatible with `async with pool.acquire() as conn:`"""
+        conn = await self.get_connection()
+        try:
+            yield conn
+        finally:
+            await self.release_connection(conn)
+
     async def get_connection(self):
         """Get a connection from the pool."""
         if self._pool is None:
@@ -90,3 +100,7 @@ class DatabasePool:
 
 # Initialize DB pool at application startup
 db_pool = DatabasePool()
+
+
+def get_db_pool() -> DatabasePool:
+    return db_pool

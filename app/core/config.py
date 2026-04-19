@@ -34,10 +34,22 @@ class Settings(BaseSettings):
     GEMINI_TEMPERATURE: float = float(os.getenv("GEMINI_TEMPERATURE", "0.2"))
     GEMINI_TOP_P: float = float(os.getenv("GEMINI_TOP_P", "0.95"))
     
-    # Claude model settings
+    # Claude model settings (v1 legacy)
     CLAUDE_MODEL_NAME: str = os.getenv("CLAUDE_MODEL_NAME", "claude-3-sonnet-20240229")
     CLAUDE_TEMPERATURE: float = float(os.getenv("CLAUDE_TEMPERATURE", "0.2"))
     CLAUDE_MAX_TOKENS: int = int(os.getenv("CLAUDE_MAX_TOKENS", "4000"))
+
+    # v2 Agent settings
+    LLM_BACKEND: str = os.getenv("LLM_BACKEND", "direct")          # "direct" | "vertex"
+    # Default to CLAUDE_MODEL_NAME if set (backwards compat), else fall back to sonnet alias
+    CLAUDE_DEFAULT_MODEL: str = os.getenv(
+        "CLAUDE_DEFAULT_MODEL",
+        os.getenv("CLAUDE_MODEL_NAME", "claude-sonnet")
+    )
+    CLAUDE_FAST_MODEL: str = os.getenv("CLAUDE_FAST_MODEL", "claude-haiku-4-5")
+    CLAUDE_POWERFUL_MODEL: str = os.getenv("CLAUDE_POWERFUL_MODEL", "claude-opus-4-7")
+    CLAUDE_V2_MAX_TOKENS: int = int(os.getenv("CLAUDE_V2_MAX_TOKENS", "16000"))
+    CLAUDE_THINKING_BUDGET: int = int(os.getenv("CLAUDE_THINKING_BUDGET", "8000"))
     
     # Database settings
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./test.db")
