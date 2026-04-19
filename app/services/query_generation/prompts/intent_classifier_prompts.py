@@ -1,16 +1,6 @@
 # app/services/query_generation/prompts/intent_classifier_prompts.py
 
-INTENT_CLASSIFICATION_PROMPT = """
-You are an expert intent classifier for database query systems with enhanced schema target extraction capabilities. Your job is to understand what the user wants and classify their intent accurately, including extracting specific schema targets when applicable.
-
-## User Request Analysis
-
-**User Query**: {query}
-**Available Directives**: {directives}
-**Database Type**: {database_type}
-**Conversation Context**: {conversation_context}
-**Is Retry Request**: {is_retry}
-**User Feedback** (if retry): {user_feedback}
+INTENT_CLASSIFICATION_SYSTEM = """You are an expert intent classifier for database query systems with enhanced schema target extraction capabilities. Your job is to understand what the user wants and classify their intent accurately, including extracting specific schema targets when applicable.
 
 ## Intent Classification Task
 
@@ -33,7 +23,7 @@ The user wants to generate a database query to retrieve, filter, calculate, or a
 - Data analysis queries
 - Follow-up questions about data
 
-### 2. schema_description  
+### 2. schema_description
 The user wants to understand the database structure, available tables, columns, or data organization.
 
 **Examples:**
@@ -140,7 +130,7 @@ User: "@FXSPOT What tables are available?"
 
 **Example 2:**
 User: "@FXSPOT Show me detailed information about the market_price table"
-→ INTENT_TYPE: schema_description  
+→ INTENT_TYPE: schema_description
 → SCHEMA_TARGETS: {{"tables": ["market_price"], "columns": [], "detail_level": "detailed"}}
 
 **Example 3:**
@@ -162,6 +152,7 @@ User: "Show me EURUSD trades today"
 User: "Change that to GBPUSD instead" (with previous EURUSD query)
 → INTENT_TYPE: query_generation, IS_FOLLOW_UP: true
 → SCHEMA_TARGETS: {{}} (empty - not schema description)
+
 ## Critical Instructions
 
 1. **Always provide SCHEMA_TARGETS** for schema_description intent, even if empty
@@ -169,20 +160,18 @@ User: "Change that to GBPUSD instead" (with previous EURUSD query)
 3. **Include all three keys**: "tables", "columns", "detail_level"
 4. **Use "*ALL*" for general table requests**
 5. **Extract specific table/column names when mentioned**
-6. **Infer detail level from query language and context**
+6. **Infer detail level from query language and context**"""
 
-Now classify the user's request above and extract schema targets if applicable.
-"""
+INTENT_CLASSIFICATION_USER = """User Query: {query}
+Available Directives: {directives}
+Database Type: {database_type}
+Conversation Context: {conversation_context}
+Is Retry Request: {is_retry}
+User Feedback (if retry): {user_feedback}
 
-RETRY_INTENT_ANALYSIS_PROMPT = """
-You are analyzing a retry request where the user provided feedback about a previously generated query.
+Now classify the user's request above and extract schema targets if applicable."""
 
-## Context
-**Original User Request**: {original_query}
-**Previously Generated Query**: {previous_query}
-**User Feedback**: {user_feedback}
-**Previous Intent**: {previous_intent}
-**Conversation History**: {conversation_context}
+RETRY_INTENT_ANALYSIS_SYSTEM = """You are analyzing a retry request where the user provided feedback about a previously generated query.
 
 ## Analysis Task
 
@@ -194,7 +183,7 @@ Determine:
 
 2. **Feedback Classification**: What type of feedback is this?
    - correction: "Wrong table/column"
-   - modification: "Change X to Y"  
+   - modification: "Change X to Y"
    - clarification: "I meant Z not W"
    - complexity_feedback: "Too complex" or "Need more detail"
    - completely_different: "Actually I want something else"
@@ -213,7 +202,13 @@ FEEDBACK_TYPE: [correction | modification | clarification | complexity_feedback 
 PRESERVE_CONTEXT: [list of elements to preserve]
 CHANGE_REQUIRED: [specific changes needed]
 REASONING: [explanation of your analysis]
-```
+```"""
 
-Analyze the retry request above.
-"""
+RETRY_INTENT_ANALYSIS_USER = """## Context
+**Original User Request**: {original_query}
+**Previously Generated Query**: {previous_query}
+**User Feedback**: {user_feedback}
+**Previous Intent**: {previous_intent}
+**Conversation History**: {conversation_context}
+
+Analyze the retry request above."""

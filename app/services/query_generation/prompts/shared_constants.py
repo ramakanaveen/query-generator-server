@@ -44,7 +44,7 @@ KDB_SYNTAX_CORRECTIONS = """
 """
 
 # Enhanced single-line KDB notes with syntax corrections
-KDB_NOTES_SINGLE = f"""
+KDB_NOTES_SINGLE = rf"""
 
 ---
 
@@ -97,7 +97,7 @@ KDB_NOTES_SINGLE = f"""
 """
 
 # Enhanced multi-line KDB notes with syntax corrections
-KDB_NOTES_MULTI = f"""
+KDB_NOTES_MULTI = rf"""
 
 ---
 

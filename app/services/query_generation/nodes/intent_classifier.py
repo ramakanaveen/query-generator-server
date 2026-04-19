@@ -8,8 +8,10 @@ from langchain.prompts import ChatPromptTemplate
 from app.core.logging import logger
 from app.core.profiling import timeit
 from app.services.query_generation.prompts.intent_classifier_prompts import (
-    INTENT_CLASSIFICATION_PROMPT,
-    RETRY_INTENT_ANALYSIS_PROMPT
+    INTENT_CLASSIFICATION_SYSTEM,
+    INTENT_CLASSIFICATION_USER,
+    RETRY_INTENT_ANALYSIS_SYSTEM,
+    RETRY_INTENT_ANALYSIS_USER,
 )
 
 
@@ -76,7 +78,10 @@ async def handle_initial_intent_classification(state, llm, directives, conversat
     """Handle initial intent classification for new requests."""
     try:
         # Create the classification prompt
-        prompt = ChatPromptTemplate.from_template(INTENT_CLASSIFICATION_PROMPT)
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", INTENT_CLASSIFICATION_SYSTEM),
+            ("human", INTENT_CLASSIFICATION_USER),
+        ])
         chain = prompt | llm
 
         # Prepare input data
@@ -134,7 +139,10 @@ async def handle_retry_intent_analysis(state, llm, conversation_context):
         await handle_initial_intent_classification(state, llm, state.directives, conversation_context)
 
         # Then do retry-specific analysis
-        prompt = ChatPromptTemplate.from_template(RETRY_INTENT_ANALYSIS_PROMPT)
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", RETRY_INTENT_ANALYSIS_SYSTEM),
+            ("human", RETRY_INTENT_ANALYSIS_USER),
+        ])
         chain = prompt | llm
 
         input_data = {
