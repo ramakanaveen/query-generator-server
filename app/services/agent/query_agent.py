@@ -26,10 +26,30 @@ logger = logging.getLogger(__name__)
 
 TOOLS: list[dict] = [
     {
+        "name": "list_schema_groups",
+        "description": (
+            "List all available schema groups with descriptions and table counts. "
+            "Call this when the query is ambiguous about which business domain to search, "
+            "or when the user asks what data is available. Returns group names you can "
+            "then pass as the 'groups' filter in search_schema."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "database_type": {"type": "string", "enum": ["kdb", "starburst", "postgres"]},
+            },
+            "required": ["database_type"],
+        },
+    },
+    {
         "name": "search_schema",
         "description": (
             "Search for relevant database tables and columns given a natural language description. "
-            "Always call this before generating any query to ground yourself in the actual schema."
+            "Always call this before generating any query to ground yourself in the actual schema. "
+            "Each result includes the table's group and schema (KDB namespace) so you know exactly "
+            "which namespace to use in the generated query. "
+            "If a directive like @stirt is present, pass it as the groups filter. "
+            "For ambiguous multi-domain queries, call list_schema_groups first then pass relevant groups here."
         ),
         "input_schema": {
             "type": "object",
@@ -37,6 +57,12 @@ TOOLS: list[dict] = [
                 "query": {"type": "string"},
                 "database_type": {"type": "string", "enum": ["kdb", "starburst", "postgres"]},
                 "limit": {"type": "integer", "default": 5},
+                "groups": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of schema group names to restrict the search. "
+                                   "Omit to search all groups.",
+                },
             },
             "required": ["query", "database_type"],
         },
@@ -448,15 +474,25 @@ class QueryAgent:
         name = tool["name"]
         inputs = tool.get("input") or {}
 
+        if name == "list_schema_groups":
+            result = await schema_tool.list_schema_groups(
+                database_type=inputs.get("database_type", request.database_type),
+            )
+            return result, None
+
         if name == "search_schema":
+            # Extract directive groups from query if agent didn't supply them
+            groups = inputs.get("groups") or None
             result = await schema_tool.search_schema(
                 query=inputs.get("query", request.query),
                 database_type=inputs.get("database_type", request.database_type),
                 limit=inputs.get("limit", 5),
                 user_id=request.user_id,
+                groups=groups,
             )
             await event_queue.put(SSEEvent(EventType.SCHEMA_LOOKUP, {
                 "tables": [t["table"] for t in result.get("tables", [])],
+                "groups": list({t.get("group", "") for t in result.get("tables", []) if t.get("group")}),
                 "source": result.get("source", "vector"),
             }))
             return result, None

@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from app.routes import query, conversation, websocket, directives, feedback, schema_manager, execution_history
 from app.routes import query_v2
+from app.routes import admin_schema
 from app.core.config import settings
 from app.routes import schema_management
 from app.core.db import db_pool
@@ -49,6 +50,7 @@ app.include_router(schema_manager.router, prefix="/api/v1", tags=["schema-manage
 app.include_router(debug_schema.router, prefix="/api/v1", tags=["debug"])
 app.include_router(execution_history.router, prefix="/api/v1", tags=["execution-history"])
 app.include_router(query_v2.router, prefix="/api/v2", tags=["query-v2"])
+app.include_router(admin_schema.router, prefix="/api/admin", tags=["admin"])
 
 # Socket.IO setup
 sio = socketio.AsyncServer(

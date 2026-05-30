@@ -8,6 +8,7 @@ from app.services.query_generation.prompts.generator_prompts import GENERATOR_PR
 from app.services.query_generation.prompts.refiner_prompts import ENHANCED_REFINER_PROMPT_TEMPLATE
 from app.services.query_generation.prompts.retry_prompts import RETRY_GENERATION_PROMPT
 from app.core.logging import logger
+from app.services.enhanced_schema_service import format_schema_context_for_llm
 
 def format_conversation_history(history):
     """Format conversation history for the generator prompt."""
@@ -146,7 +147,7 @@ async def generate_initial_query_simplified(state):
             "directives": directives,
             "entities": entities,
             "intent": intent,
-            "schema": format_schema_for_generation(schema),
+            "schema": format_schema_context_for_llm(schema),
             "database_type": database_type,
             "examples": schema.get("examples", []),  # Schema-level examples
             "conversation_context": conversation_context,
@@ -193,7 +194,7 @@ async def generate_retry_query(state):
             "feedback_analysis": str(feedback_analysis),
             "feedback_trail": "Enhanced service context",
             "key_context": ", ".join(getattr(state, 'key_context', [])),
-            "schema": format_schema_for_generation(state.query_schema),
+            "schema": format_schema_context_for_llm(state.query_schema),
             "few_shot_examples": few_shot_text
         }
 
@@ -225,7 +226,7 @@ Guidance Type: {action_type}
 Instructions: {instructions}
 
 Original Query: {state.query}
-Available Schema: {format_schema_for_generation(state.query_schema)}
+Available Schema: {format_schema_context_for_llm(state.query_schema)}
 
 {examples_context}
 

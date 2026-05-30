@@ -95,7 +95,8 @@ class EnhancedSchemaService:
             directives: List[str] = None,
             entities: List[str] = None,
             user_id: Optional[str] = None,
-            config: SchemaRetrievalConfig = None
+            config: SchemaRetrievalConfig = None,
+            groups: List[str] = None,
     ) -> SchemaRetrievalResult:
         """
         Main entry point: Retrieve schema and examples for query generation.
@@ -110,7 +111,7 @@ class EnhancedSchemaService:
         config = config or SchemaRetrievalConfig()
 
         # Check cache first
-        cache_key = self._build_cache_key(query_text, directives, entities, user_id, config)
+        cache_key = self._build_cache_key(query_text, directives, entities, user_id, config, groups)
         cached_result = self._get_cached_result(cache_key)
         if cached_result:
             logger.info("📦 Returning cached schema result")
@@ -127,7 +128,8 @@ class EnhancedSchemaService:
                 query_embedding=query_embedding,
                 query_text=query_text,
                 directives=directives,
-                config=config
+                config=config,
+                groups=groups,
             )
 
             if not relevant_tables:
@@ -320,7 +322,8 @@ class EnhancedSchemaService:
             query_embedding: List[float],
             query_text: str,
             directives: List[str],
-            config: SchemaRetrievalConfig
+            config: SchemaRetrievalConfig,
+            groups: List[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Optimized table search using pre-computed query embedding.
@@ -338,7 +341,8 @@ class EnhancedSchemaService:
             for threshold in thresholds:
                 try:
                     # Optimized query using existing table embeddings
-                    query = """
+                    groups_filter = "AND sg.name = ANY($4::text[])" if groups else ""
+                    query = f"""
                             SELECT
                                 td.id,
                                 td.name AS table_name,
@@ -346,8 +350,10 @@ class EnhancedSchemaService:
                                 td.content,
                                 sd.id AS schema_id,
                                 sd.name AS schema_name,
+                                sd.description AS schema_description,
                                 sg.id AS group_id,
                                 sg.name AS group_name,
+                                sg.description AS group_description,
                                 sv.id AS schema_version_id,
                                 sv.version AS schema_version,
                                 1 - (td.embedding <=> $1::vector) AS similarity
@@ -363,11 +369,15 @@ class EnhancedSchemaService:
                                 active_schemas a ON sv.id = a.current_version_id
                             WHERE
                                 1 - (td.embedding <=> $1::vector) > $2
+                                {groups_filter}
                             ORDER BY similarity DESC
-                                LIMIT $3 \
+                                LIMIT $3
                             """
 
-                    results = await conn.fetch(query, embedding_str, threshold, config.max_tables)
+                    if groups:
+                        results = await conn.fetch(query, embedding_str, threshold, config.max_tables, groups)
+                    else:
+                        results = await conn.fetch(query, embedding_str, threshold, config.max_tables)
 
                     if results:
                         logger.info(f"🎯 Found {len(results)} tables at threshold {threshold}")
@@ -385,8 +395,10 @@ class EnhancedSchemaService:
                                 "table_name": row["table_name"],
                                 "schema_id": row["schema_id"],
                                 "schema_name": row["schema_name"],
+                                "schema_description": row["schema_description"] or "",
                                 "group_id": row["group_id"],
                                 "group_name": row["group_name"],
+                                "group_description": row["group_description"] or "",
                                 "schema_version_id": row["schema_version_id"],
                                 "schema_version": row["schema_version"],
                                 "description": row["description"],
@@ -831,7 +843,9 @@ class EnhancedSchemaService:
             schema_structure["tables"][table_name]["metadata"].update({
                 "similarity_score": table.get("similarity", 0.0),
                 "schema_name": table.get("schema_name", "unknown"),
-                "group_name": table.get("group_name", "unknown")
+                "schema_description": table.get("schema_description", ""),
+                "group_name": table.get("group_name", "unknown"),
+                "group_description": table.get("group_description", ""),
             })
 
         return schema_structure
@@ -903,12 +917,14 @@ class EnhancedSchemaService:
     # ========== CACHING METHODS ==========
 
     def _build_cache_key(self, query_text: str, directives: List[str], entities: List[str],
-                         user_id: Optional[str], config: SchemaRetrievalConfig) -> str:
+                         user_id: Optional[str], config: SchemaRetrievalConfig,
+                         groups: List[str] = None) -> str:
         """Build cache key for full results."""
         key_parts = [
             query_text,
             ",".join(sorted(directives or [])),
             ",".join(sorted(entities or [])),
+            ",".join(sorted(groups or [])),
             user_id or "anonymous",
             str(config.max_tables),
             str(config.vector_similarity_threshold),
@@ -1242,3 +1258,84 @@ class EnhancedSchemaService:
         results["cache_performance"] = self.get_cache_stats()
 
         return results
+
+
+def format_schema_context_for_llm(schema_structure: dict) -> str:
+    """
+    Format retrieved schema into preamble+short-label format for LLM consumption.
+
+    Group and schema descriptions appear once in a preamble block; each table
+    entry only carries a short [group/schema] label — no repeated descriptions.
+    Token-efficient and better for LLM attention than inline repetition.
+    """
+    if not schema_structure or not schema_structure.get("tables"):
+        return "No schema information available."
+
+    tables_dict = schema_structure.get("tables", {})
+
+    # Collect unique groups and schemas present in the result set
+    groups_seen: dict[str, str] = {}   # group_name → group_description
+    schemas_seen: dict[tuple, str] = {}  # (group_name, schema_name) → schema_description
+
+    for table_info in tables_dict.values():
+        if not isinstance(table_info, dict):
+            continue
+        meta = table_info.get("metadata", {})
+        gname = meta.get("group_name", "")
+        sname = meta.get("schema_name", "")
+        gdesc = meta.get("group_description", "")
+        sdesc = meta.get("schema_description", "")
+        if gname and gname not in groups_seen:
+            groups_seen[gname] = gdesc
+        if gname and sname:
+            key = (gname, sname)
+            if key not in schemas_seen:
+                schemas_seen[key] = sdesc
+
+    parts: list[str] = []
+
+    # Preamble — one entry per unique group/schema
+    if groups_seen:
+        preamble: list[str] = ["Groups referenced:"]
+        for gname in sorted(groups_seen):
+            gdesc = groups_seen[gname]
+            preamble.append(f"- {gname}: {gdesc}" if gdesc else f"- {gname}")
+            for (gn, sn) in sorted(schemas_seen):
+                if gn == gname:
+                    sdesc = schemas_seen[(gn, sn)]
+                    preamble.append(f"  - {sn}: {sdesc}" if sdesc else f"  - {sn}")
+        parts.append("\n".join(preamble))
+
+    # Table entries — short label per table, no repeated descriptions
+    table_lines: list[str] = [f"Tables ({len(tables_dict)}):"]
+    for table_name, table_info in tables_dict.items():
+        if not isinstance(table_info, dict):
+            continue
+        meta = table_info.get("metadata", {})
+        gname = meta.get("group_name", "")
+        sname = meta.get("schema_name", "")
+        label = f"[{gname}/{sname}]" if gname else ""
+
+        table_lines.append("")
+        table_lines.append(f"{table_name} {label}".strip())
+
+        desc = table_info.get("description", "")
+        if desc:
+            table_lines.append(desc)
+
+        columns = table_info.get("columns", [])[:12]
+        if columns:
+            col_parts: list[str] = []
+            for col in columns:
+                if isinstance(col, dict):
+                    cname = col.get("name", "")
+                    ctype = col.get("type", col.get("kdb_type", ""))
+                    if cname:
+                        col_parts.append(f"{cname}({ctype})" if ctype else cname)
+            if col_parts:
+                table_lines.append(f"Columns: {', '.join(col_parts)}")
+
+    if len(table_lines) > 1:
+        parts.append("\n".join(table_lines))
+
+    return "\n\n".join(parts) if parts else "No schema information available."

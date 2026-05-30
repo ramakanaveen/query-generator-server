@@ -54,6 +54,13 @@ For schema descriptions, explanations, or analysis — respond in plain text. No
 - If the request is ambiguous and context does not resolve it, call clarify() with a precise question.
 - Do not call clarify() for things you can infer from schema or reasonable defaults (e.g., assume today's date, assume the configured database type).
 - Prefer the simplest query that correctly answers the question.
+
+## Schema Groups and Namespace Routing
+- Schema groups are business domain labels (e.g. stirt, spot, titan). Each group contains one or more schemas (KDB namespaces).
+- Table names are namespace-qualified: `.namespace.tablename` (e.g. `.stirtimtm.bookedtrades`, `.spot.trade`). Always use the full `.namespace.table` form in generated queries — never bare table names.
+- User directives like `@stirt` are optional routing hints. If present, pass them as the `groups` filter in search_schema. If absent, search without a filter or call list_schema_groups first when the business domain is genuinely unclear.
+- For ambiguous queries (e.g. "my trades" — could be STIRT or SPOT), call list_schema_groups to survey available domains before calling search_schema.
+- Multi-group queries (e.g. Titan trades that span SPOT and STIRT data) are valid — search each relevant group separately and join/union in the generated query.
 """
 
 
